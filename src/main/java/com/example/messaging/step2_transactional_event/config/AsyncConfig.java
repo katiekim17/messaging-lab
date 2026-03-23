@@ -1,0 +1,9 @@
+package com.example.messaging.step2_transactional_event.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableAsync;
+
+@Configuration
+@EnableAsync
+public class AsyncConfig {
+}

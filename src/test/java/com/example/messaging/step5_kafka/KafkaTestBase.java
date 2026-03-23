@@ -18,6 +18,9 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.TestInfo;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +34,12 @@ import java.util.concurrent.TimeUnit;
 @Testcontainers
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 public abstract class KafkaTestBase {
+
+    @BeforeEach
+    void printTestHeader(TestInfo testInfo) {
+        String name = testInfo.getDisplayName().replace("_", " ");
+        System.out.printf("%n═══ %s ═══%n", name);
+    }
 
     @Container
     static final KafkaContainer KAFKA = new KafkaContainer(

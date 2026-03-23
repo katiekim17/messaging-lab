@@ -117,6 +117,15 @@ sequenceDiagram
 GenericContainer("redis:7-alpine") - port 6379
 ```
 
+## Backpressure와 Slow Consumer
+
+Producer가 Consumer보다 빠르면 어떻게 되는가?
+
+- **Redis Pub/Sub**: 느린 Consumer가 처리하지 못한 메시지는 **사라진다**. Push 모델이라 Producer 속도에 Consumer가 맞춰야 한다.
+- **Kafka** (Step 5): 느린 Consumer는 offset 갭(lag)이 늘어날 뿐, 메시지는 **로그에 남아있다**. Pull 모델이라 Consumer가 자기 속도로 읽는다.
+
+이 차이가 "보존이 필요한 이벤트에는 Redis Pub/Sub이 부적합한" 또 하나의 이유다.
+
 ## 체험할 한계 -> Step 5로
 
 메시지가 저장되지 않는다. 구독자가 없으면 증발한다.

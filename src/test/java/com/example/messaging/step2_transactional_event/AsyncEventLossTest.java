@@ -45,17 +45,20 @@ class AsyncEventLossTest {
 
     /**
      * 흐름:
-     *   리스너가 예외를 던지도록 설정 → 주문 생성 (커밋 완료)
+     *   리스너 실패 설정 → 주문 생성 (커밋 완료)
      *   → @Async 리스너 실행 → 예외 발생 → 포인트 미적립
-     *   → 이벤트 기록이 어디에도 없으므로 재처리 방법 없음
+     *   → 이벤트 기록이 DB 어디에도 없으므로 재처리 방법 없음
      *
-     * 증명: @Async 이벤트는 메모리에만 존재하므로, 실패해도 재처리할 수 없다.
-     *       DB에 PENDING 기록이 없기 때문이다.
-     *       Step 3의 Event Store가 필요한 이유.
+     * 증명: @Async 이벤트는 메모리에만 존재한다. 리스너가 실패하거나 서버가 죽으면
+     *       이벤트를 다시 찾을 방법이 없다. DB에 PENDING 기록이 없기 때문이다.
+     *       (여기서는 리스너 실패로 시뮬레이션하지만, 서버 재시작도 동일한 결과다)
+     *       → Step 3의 Event Store가 이 문제를 해결한다.
      */
     @Test
     void 서버가_재시작되면_Async_리스너가_처리하지_못한_이벤트는_유실된다() throws InterruptedException {
-        // Given: 리스너가 실패하도록 설정 (서버 재시작 중 처리 실패와 동일한 효과)
+        // Given: 리스너가 실패하도록 설정
+        // 서버 재시작, 프로세스 강제 종료, 리스너 예외 — 원인은 다르지만 결과는 같다:
+        // 메모리에만 있던 이벤트가 사라지고, 재처리할 기록이 없다.
         asyncPointListener.setShouldFail(true);
         CountDownLatch latch = new CountDownLatch(1);
         asyncPointListener.setLatch(latch);

@@ -67,11 +67,15 @@ class EventualConsistencyTest {
         // Then 1: 주문은 즉시 확인 가능
         assertThat(orderRepository.findById(orderId)).isPresent();
 
-        // Then 2: 포인트는 아직 반영되지 않았을 수 있다
-        // (@Async 리스너가 별도 스레드에서 아직 실행 중이거나 대기 중)
-        Optional<Point> immediatePoint = pointRepository.findByUserId("user-1");
-        // 비동기이므로 이 시점에 반영됐을 수도, 안 됐을 수도 있다.
-        // 중요한 건: "보장되지 않는다"는 것이다.
+        // Then 2: 포인트 반영은 "보장되지 않는다"
+        // @Async 리스너가 별도 스레드에서 아직 실행 중이거나 대기 중이므로
+        // 이 시점에 반영됐을 수도, 안 됐을 수도 있다.
+        // 동기 방식(@EventListener)이었다면 여기서 항상 반영되어 있겠지만,
+        // AFTER_COMMIT + @Async에서는 보장할 수 없다.
+        //
+        // NOTE: assertThat(point).isEmpty()로 단정하지 않는 이유 —
+        // 스레드 스케줄링에 따라 이미 반영되었을 수 있어서 테스트가 불안정해진다.
+        // Eventual Consistency의 핵심은 "없을 수도 있다"이지 "항상 없다"가 아니다.
 
         // Then 3: 비동기 리스너 완료까지 대기하면 "곧" 반영된다
         assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();

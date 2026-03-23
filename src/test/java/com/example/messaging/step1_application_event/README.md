@@ -109,6 +109,7 @@ sequenceDiagram
 |---|---|---|
 | DirectCallCouplingTest | 직접_호출_방식에서_OrderService는_모든_후속_서비스에_의존한다 | 생성자 의존성 개수로 결합도 증명 |
 | DirectCallCouplingTest | 직접_호출_방식에서_후속_처리_실패시_주문도_롤백된다 | 강한 결합의 부작용 |
+| DirectCallCouplingTest | 직접_호출_방식에서_모든_후속_처리가_성공하면_주문이_완료된다 | 정상 흐름 |
 | ApplicationEventDecouplingTest | 이벤트_방식에서_OrderService는_EventPublisher에만_의존한다 | 의존성 제거 확인 |
 | ApplicationEventDecouplingTest | 이벤트_발행_후_리스너가_정상_처리하면_모든_데이터가_저장된다 | 정상 흐름 |
 | ApplicationEventDecouplingTest | 후속_로직_추가시_OrderService는_수정하지_않아도_된다 | OCP 원칙 |

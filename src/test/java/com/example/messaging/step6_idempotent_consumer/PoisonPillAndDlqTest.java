@@ -60,6 +60,15 @@ class PoisonPillAndDlqTest extends KafkaTestBase {
         // 실제로는 offset 커밋 전략에 따라 poison pill에서 영원히 멈출 수 있다
     }
 
+    /**
+     * 흐름:
+     *   정상 msg 1건 + poison pill 1건 + 정상 msg 1건 발행
+     *   → Consumer가 3건 poll → poison pill은 파싱 실패
+     *   → 실패 메시지를 DLQ 토픽으로 전송 → 정상 메시지만 처리
+     *   → DLQ Consumer가 격리된 메시지를 확인
+     *
+     * 증명: DLQ는 처리 불가능한 메시지를 격리하여 정상 흐름을 보호한다
+     */
     @Test
     void 처리_실패한_메시지를_DLQ_토픽으로_격리할_수_있다() throws Exception {
         String topic = "dlq-source-test";

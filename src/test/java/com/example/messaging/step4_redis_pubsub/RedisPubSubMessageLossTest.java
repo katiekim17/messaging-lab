@@ -76,6 +76,15 @@ class RedisPubSubMessageLossTest {
         container.removeMessageListener(listener);
     }
 
+    /**
+     * 흐름:
+     *   Phase 1: 구독 중 → 메시지1 발행 → 수신 성공
+     *   Phase 2: 구독 해제 → 메시지2 발행 → 유실
+     *   Phase 3: 재구독 → 메시지3 발행 → 수신 성공
+     *   결과: 메시지1, 3만 수신. 메시지2는 영영 사라짐.
+     *
+     * 증명: 다운타임 동안 발행된 메시지는 복구 불가. Step 5(Kafka)가 필요한 이유.
+     */
     @Test
     void 구독자가_다운된_동안_발행된_메시지는_수신할_수_없다() throws InterruptedException {
         String channel = "order-events";

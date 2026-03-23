@@ -17,6 +17,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class KafkaMessagePreservationTest extends KafkaTestBase {
 
+    /**
+     * 흐름:
+     *   Phase 1: Consumer A가 msg 1~3 읽고 commit 후 종료
+     *   Phase 2: Consumer 없는 상태에서 msg 4~5 발행
+     *   Phase 3: 같은 group으로 Consumer B 생성 → offset 3부터 이어서 읽음
+     *
+     * 증명: Redis Pub/Sub과 달리 Kafka는 메시지를 로그에 보존하여 재시작 후에도 이어서 읽는다
+     */
     @Test
     void Consumer가_중지된_사이에_발행된_메시지를_재시작_후_이어서_읽는다() throws Exception {
         String topic = "preservation-test";

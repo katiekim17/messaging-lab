@@ -45,6 +45,15 @@ class KafkaConsumerGroupIndependenceTest extends KafkaTestBase {
         // 두 Group 모두 동일한 3건을 각각 수신했다
     }
 
+    /**
+     * 흐름:
+     *   Phase 1: msg 1~3 발행 → Group A(slow)가 3건 읽고 commit
+     *   Phase 2: msg 4~5 추가 발행
+     *   → Group B(fast): 5건 전부 읽기 (독립적 offset, earliest)
+     *   → Group A 재연결: msg 4~5만 읽기 (committed offset 이후)
+     *
+     * 증명: 각 Consumer Group은 자기만의 offset을 관리하며 서로 영향을 주지 않는다
+     */
     @Test
     void 한_Consumer_Group의_소비_속도가_다른_Group에_영향을_주지_않는다() throws Exception {
         String topic = "group-speed-test";

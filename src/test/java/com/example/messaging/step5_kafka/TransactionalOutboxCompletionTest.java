@@ -80,6 +80,14 @@ class TransactionalOutboxCompletionTest {
         assertThat(pending.get(0).getAggregateId()).isEqualTo(orderId.toString());
     }
 
+    /**
+     * 흐름:
+     *   주문 생성 → Outbox에 PENDING 기록 (같은 TX)
+     *   → 릴레이가 PENDING 조회 → Kafka로 발행 → 상태를 SENT로 변경
+     *   → Kafka Consumer가 메시지 수신 확인
+     *
+     * 증명: Step 3의 Event Store + Kafka Relay = Transactional Outbox Pattern 완성
+     */
     @Test
     void 릴레이가_PENDING_이벤트를_Kafka로_발행하고_SENT로_변경한다() throws Exception {
         // Given

@@ -44,6 +44,13 @@ class AsyncEventTest {
         pointRepository.deleteAll();
     }
 
+    /**
+     * 흐름:
+     *   주문 생성 (메인 스레드) → 이벤트 발행 → @Async 리스너가 별도 스레드에서 실행
+     *   → CountDownLatch로 완료 대기 → 스레드 이름 비교
+     *
+     * 증명: @Async 리스너는 발행자와 다른 스레드에서 실행되어 응답을 막지 않는다
+     */
     @Test
     void Async_리스너는_별도_스레드에서_실행되어_응답이_빠르다() throws InterruptedException {
         // Given
@@ -61,6 +68,13 @@ class AsyncEventTest {
         assertThat(asyncPointListener.getExecutedThread()).isNotEqualTo(callerThread);
     }
 
+    /**
+     * 흐름:
+     *   리스너가 예외를 던지도록 설정 → 주문 생성 → @Async 리스너 예외 발생
+     *   → 호출자에게는 예외가 전파되지 않음 → 주문은 성공, 포인트는 적립 안 됨
+     *
+     * 증명: @Async의 실패는 호출자에게 보이지 않는다. 이것이 Step 3이 필요한 이유다.
+     */
     @Test
     void Async_리스너_예외는_호출자에게_전파되지_않는다_실패가_숨겨진다() throws InterruptedException {
         // Given: 리스너가 예외를 던지도록 설정

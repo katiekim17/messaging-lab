@@ -46,6 +46,14 @@ class EventualConsistencyTest {
         pointRepository.deleteAll();
     }
 
+    /**
+     * 흐름:
+     *   주문 생성 (즉시 커밋) → 주문 조회 성공 → @Async 리스너 완료 대기
+     *   → 포인트 조회 → "곧" 반영됨
+     *
+     * 증명: AFTER_COMMIT + @Async를 선택한 순간, 즉시 일관성은 포기한 것이다.
+     *       이 시간차는 버그가 아니라 설계 결정(Eventual Consistency)이다.
+     */
     @Test
     void 주문_직후_포인트를_조회하면_아직_반영되지_않았을_수_있다() throws InterruptedException {
         // Given: @Async + @TransactionalEventListener(AFTER_COMMIT)

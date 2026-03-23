@@ -47,6 +47,13 @@ class EventRelayTest {
         orderRepository.deleteAll();
     }
 
+    /**
+     * 흐름:
+     *   주문 생성 → PENDING 이벤트 기록 (같은 TX)
+     *   → 릴레이(스케줄러) 실행 → PENDING 이벤트 조회 → 포인트 적립
+     *
+     * 증명: 릴레이가 DB에 저장된 이벤트를 꺼내서 후속 처리를 수행한다
+     */
     @Test
     void 스케줄러는_PENDING_상태의_이벤트를_조회하여_처리한다() {
         // Given: 주문 생성 → PENDING 이벤트 기록됨

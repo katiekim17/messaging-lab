@@ -36,6 +36,13 @@ class EventListenerTimingTest {
         syncPointListener.reset();
     }
 
+    /**
+     * 흐름:
+     *   @EventListener 내부에서 외부 API 호출 → 트랜잭션 도중 예외 → 롤백
+     *   → 외부 API 호출은 이미 실행되었으므로 되돌릴 수 없다
+     *
+     * 증명: @EventListener는 커밋 전에 실행되므로, 롤백되어도 부수효과는 남는다
+     */
     @Test
     void EventListener는_커밋_전에_실행되어_롤백시_부수효과가_되돌려지지_않는다() {
         // Given: @EventListener가 외부 API를 호출하는 상황 시뮬레이션

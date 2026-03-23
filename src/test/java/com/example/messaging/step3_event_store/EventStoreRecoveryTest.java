@@ -63,6 +63,14 @@ class EventStoreRecoveryTest {
         // Event Store 덕분에 DB에 영속되어 재처리가 가능하다
     }
 
+    /**
+     * 흐름:
+     *   주문 2건 생성 → PENDING 이벤트 2건 기록 → 릴레이 미실행 (서버 다운)
+     *   → "재시작된 서버"의 스케줄러가 릴레이 실행
+     *   → PENDING 2건 모두 PROCESSED로 전이 → 포인트 적립 완료
+     *
+     * 증명: 서버가 죽어도 DB에 남은 PENDING 이벤트를 재처리할 수 있다
+     */
     @Test
     void 재시작_후_스케줄러가_PENDING_이벤트를_재처리한다() {
         // Given: 여러 주문 생성 후 릴레이 미실행 (서버 다운 시뮬레이션)

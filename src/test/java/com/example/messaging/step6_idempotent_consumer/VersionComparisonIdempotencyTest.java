@@ -61,6 +61,15 @@ class VersionComparisonIdempotencyTest {
         assertThat(stock.getVersion()).isEqualTo(3);
     }
 
+    /**
+     * 흐름:
+     *   v1 도착 (stock=100) → v3 먼저 도착 (stock=50, 순서 역전)
+     *   → v2 지연 도착 (stock=80) → version 3 > 2이므로 무시
+     *   → v4 도착 (stock=30) → 반영
+     *   최종: stock=30, version=4
+     *
+     * 증명: version 비교로 순서 역전이 발생해도 최종 상태가 올바르게 유지된다
+     */
     @Test
     void 순서가_역전된_이벤트_시퀀스에서_최종_상태가_올바르다() {
         // v1: 초기

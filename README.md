@@ -16,6 +16,7 @@
 - [테스트 목록](#테스트-목록)
 - [이 lab이 다루지 않는 것](#이-lab이-다루지-않는-것)
 - [EDA Overview - 큰 그림 보기](EDA-OVERVIEW.md)
+- [용어 정리 (Glossary)](GLOSSARY.md)
 
 ---
 

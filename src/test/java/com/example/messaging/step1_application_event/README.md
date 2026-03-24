@@ -116,6 +116,19 @@ sequenceDiagram
 | EventListenerExceptionTest | 리스너_예외가_발행자_트랜잭션을_롤백시킨다 | 핵심 한계 발견 |
 | EventListenerExceptionTest | EventListener는_발행자와_같은_스레드에서_동기적으로_실행된다 | 동일 TX 증명 |
 
+## 학습 포인트
+
+이 Step을 마치면 다음 질문에 답할 수 있어야 합니다:
+
+- [ ] 직접 호출 방식에서 생성자 의존성이 4개인 이유는? (`DirectCallCouplingTest` 확인)
+- [ ] 이벤트 방식으로 전환하면 의존성이 몇 개로 줄어드는가? 왜?
+- [ ] 후속 로직(알림 서비스 등)을 추가할 때 OrderService를 수정해야 하는가?
+- [ ] `@EventListener`에서 예외가 발생하면 왜 주문까지 롤백되는가? (같은 스레드, 같은 트랜잭션)
+
+> `EventListenerExceptionTest`에서 `shouldFail = true`로 설정된 리스너가 발행자 TX를 어떻게 롤백시키는지 코드를 따라가 보세요.
+
+---
+
 ## 체험할 한계 -> Step 2로
 
 리스너에서 예외가 발생하면 주문 트랜잭션까지 롤백된다.

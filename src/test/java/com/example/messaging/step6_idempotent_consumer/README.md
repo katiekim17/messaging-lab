@@ -133,6 +133,21 @@ sequenceDiagram
 | PoisonPillAndDlqTest | 파싱_불가능한_메시지가_Consumer를_막는다 | 문제 체험 |
 | PoisonPillAndDlqTest | 처리_실패한_메시지를_DLQ_토픽으로_격리할_수_있다 | DLQ 격리 |
 
+## 학습 포인트
+
+이 Step을 마치면 다음 질문에 답할 수 있어야 합니다:
+
+- [ ] At Least Once 환경에서 중복이 발생하는 정확한 시나리오는? (offset commit 직전 크래시)
+- [ ] event_handled 패턴은 범용적이지만 어떤 비용이 있는가?
+- [ ] Upsert가 멱등한 이유는? 어떤 종류의 데이터에만 적합한가?
+- [ ] version 비교 패턴은 중복뿐 아니라 무엇까지 방어하는가? (순서 역전)
+- [ ] 세 패턴 중 현재 팀의 도메인에 가장 적합한 것은? 왜?
+- [ ] poison pill 메시지를 DLQ로 격리하지 않으면 어떤 일이 발생하는가?
+
+> `DuplicateConsumptionProblemTest`를 먼저 실행해서 포인트가 200이 되는 문제를 직접 확인한 뒤, 세 가지 패턴이 각각 어떻게 해결하는지 비교해 보세요.
+
+---
+
 ## 이 Step이 도구에 종속되지 않는 이유
 
 멱등 처리와 실패 격리는 Kafka든 RabbitMQ든 Redis Streams든 동일하게 필요한 패턴이다.

@@ -125,6 +125,20 @@ sequenceDiagram
 | EventualConsistencyTest | 주문_직후_포인트를_조회하면_아직_반영되지_않았을_수_있다 | Eventual Consistency |
 | AsyncEventLossTest | 서버가_재시작되면_Async_리스너가_처리하지_못한_이벤트는_유실된다 | **핵심 한계: 메모리 휘발** |
 
+## 학습 포인트
+
+이 Step을 마치면 다음 질문에 답할 수 있어야 합니다:
+
+- [ ] `@EventListener`와 `@TransactionalEventListener(AFTER_COMMIT)`의 실행 타이밍 차이는?
+- [ ] AFTER_COMMIT 리스너에서 예외가 발생하면 주문 트랜잭션에 영향을 주는가? 왜?
+- [ ] `@Async`를 붙이면 응답은 빨라지지만 무엇을 잃는가?
+- [ ] 주문 직후 포인트를 조회하면 0이 나올 수 있다 — 이것은 버그인가, 설계 결정인가?
+- [ ] 서버가 재시작되면 `@Async` 스레드의 이벤트는 어디로 가는가?
+
+> `EventualConsistencyTest` 코드에서 `assertThat(point).isEmpty()`를 쓰지 않는 이유를 주석으로 확인해 보세요. 스레드 스케줄링에 따라 이미 반영되었을 수 있어 테스트가 불안정해지기 때문입니다.
+
+---
+
 ## 이 Step에서 인식해야 할 것
 
 AFTER_COMMIT + @Async를 선택한 이 순간, Eventual Consistency를 수용한 것이다.

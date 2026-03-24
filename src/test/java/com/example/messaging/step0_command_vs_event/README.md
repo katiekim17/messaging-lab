@@ -75,6 +75,19 @@ sequenceDiagram
 | CommandEventBehaviorTest | Event는_이미_일어난_사실이므로_발행_자체는_실패하지_않는다 | 발행은 항상 성공 |
 | CommandEventBehaviorTest | 같은_도메인에서_Command_실행_결과가_Event가_된다 | Command → 실행 → Event 흐름 |
 
+## 학습 포인트
+
+이 Step을 마치면 다음 질문에 답할 수 있어야 합니다:
+
+- [ ] Command에는 왜 `occurredAt`이 없고, Event에는 왜 있는가?
+- [ ] 같은 Kafka 토픽이라도 `coupon-issue-requests`와 `order-events`를 왜 다르게 설계해야 하는가?
+- [ ] Event 발행자가 리스너 수를 몰라도 되는 이유는 무엇인가?
+- [ ] "주문을 생성해라"와 "주문이 생성되었다"는 실패 처리 책임이 어떻게 다른가?
+
+> 테스트를 실행한 뒤, `CommandEventBehaviorTest`의 마지막 테스트에서 Command 실행 결과가 Event가 되는 흐름을 따라가 보세요.
+
+---
+
 ## 왜 먼저 다루는가
 
 이걸 구분하지 않으면 Step 5에서 토픽을 설계할 때

@@ -79,6 +79,22 @@ sequenceDiagram
 
 ### Transactional Outbox Pattern 완성
 
+Step 3과 Step 5가 각각 어떤 문제를 해결하고, 합쳐져서 Outbox가 되는지를 보여줍니다.
+
+```
+Step 3이 해결한 것                      Step 5가 해결한 것
+─────────────────────                  ─────────────────────
+"이벤트가 유실되면 안 된다"                "이벤트가 프로세스 밖으로 나가야 한다"
+
+도메인 저장 + 이벤트 기록                  Event Store → Kafka 릴레이
+= 같은 TX (원자성)                       = 보존 + 비동기 전달
+
+       합치면
+       ──────
+       Transactional Outbox Pattern
+       "원자적으로 기록하고, 안전하게 전달한다"
+```
+
 ```mermaid
 sequenceDiagram
     participant App as Application
@@ -87,14 +103,20 @@ sequenceDiagram
     participant Relay as Relay (Scheduler)
     participant Kafka
 
+    rect rgb(230, 245, 230)
+    Note over App,Outbox: Step 3 영역: 원자성 확보
     Note over App: TX BEGIN
     App->>DB: 1. 주문 저장
     App->>Outbox: 2. 이벤트 기록 (PENDING)
     Note over App: TX COMMIT
+    end
 
+    rect rgb(230, 235, 250)
+    Note over Relay,Kafka: Step 5 영역: 외부 전달
     Relay->>Outbox: 3. PENDING 이벤트 조회
     Relay->>Kafka: 4. Kafka로 발행
     Relay->>Outbox: 5. 상태를 SENT로 변경
+    end
 
     Kafka-->>Consumer1: Consumer Group A (정산)
     Kafka-->>Consumer2: Consumer Group B (알림)
@@ -126,6 +148,20 @@ sequenceDiagram
 ```
 KafkaContainer("confluentinc/cp-kafka:7.6.0") - KRaft mode (ZooKeeper 불필요)
 ```
+
+## 학습 포인트
+
+이 Step을 마치면 다음 질문에 답할 수 있어야 합니다:
+
+- [ ] Redis Pub/Sub에서 구독자가 없으면 메시지가 유실되는데, Kafka에서는 왜 보존되는가?
+- [ ] Consumer Group A가 느려도 Group B에 영향이 없는 이유는?
+- [ ] 같은 key의 메시지가 같은 파티션에 들어가면 왜 순서가 보장되는가?
+- [ ] Step 3의 Event Store + 이 Step의 Kafka Relay = Transactional Outbox. 각각이 어떤 문제를 해결하는가?
+- [ ] Kafka 발행이 실패하면 이벤트 상태가 왜 PENDING으로 남아야 하는가?
+
+> `TransactionalOutboxCompletionTest`에서 Step 3의 원자성 테스트와 이 Step의 릴레이 테스트가 어떻게 연결되는지 비교해 보세요.
+
+---
 
 ## 중복이 왜 발생하는가 -> Step 6
 

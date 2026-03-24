@@ -109,6 +109,20 @@ sequenceDiagram
 | RedisPubSubMessageLossTest | 구독자가_없으면_발행된_메시지는_유실된다 | 비보존 (구독자 없음) |
 | RedisPubSubMessageLossTest | 구독자가_다운된_동안_발행된_메시지는_수신할_수_없다 | 비보존 (다운타임) |
 
+## 학습 포인트
+
+이 Step을 마치면 다음 질문에 답할 수 있어야 합니다:
+
+- [ ] Redis Pub/Sub으로 프로세스 경계를 넘어 메시지를 보낼 수 있는가? (Yes)
+- [ ] 구독자가 없을 때 발행한 메시지는 어디로 가는가?
+- [ ] 구독자가 다운됐다가 복구되면 그 사이 메시지를 받을 수 있는가? 왜?
+- [ ] Redis Pub/Sub이 캐시 무효화에는 적합하지만 주문 이벤트에는 부적합한 이유는?
+- [ ] Fan-Out과 Competing Consumers의 차이는? Redis Pub/Sub이 후자를 지원 못하는 이유는?
+
+> `RedisPubSubMessageLossTest`의 3단계 시나리오(구독 → 다운 → 재구독)를 따라가며, 어느 구간의 메시지가 유실되는지 확인해 보세요.
+
+---
+
 ## Testcontainer
 
 이 Step은 Redis Testcontainer를 사용합니다. Docker가 실행 중이어야 합니다.

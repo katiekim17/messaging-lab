@@ -56,32 +56,43 @@ class RabbitMQMessagePreservationTest {
     @Test
     void Consumer가_다운된_동안_발행된_메시지를_재시작_후_수신한다() {
 
-        CachingConnectionFactory factory = new CachingConnectionFactory(
-                rabbit.getHost(), rabbit.getAmqpPort());
-        RabbitTemplate template = new RabbitTemplate(factory);
-
         String queueName = "downtime-test";
-        template.execute(channel -> {
+
+        // Phase 1: 정상 소비 — Consumer가 연결된 상태에서 메시지 수신
+        CachingConnectionFactory factory1 = new CachingConnectionFactory(
+                rabbit.getHost(), rabbit.getAmqpPort());
+        RabbitTemplate template1 = new RabbitTemplate(factory1);
+        template1.execute(channel -> {
             channel.queueDeclare(queueName, false, false, false, null);
             return null;
         });
 
-        // Phase 1: 정상 소비
-        template.convertAndSend(queueName, "msg-1");
-        Object received1 = template.receiveAndConvert(queueName, 5000);
+        template1.convertAndSend(queueName, "msg-1");
+        Object received1 = template1.receiveAndConvert(queueName, 5000);
         assertThat(received1.toString()).isEqualTo("msg-1");
 
-        // Phase 2: Consumer 다운 (아무도 안 읽음)
-        template.convertAndSend(queueName, "msg-2");
-        template.convertAndSend(queueName, "msg-3");
+        // Consumer 다운 시뮬레이션 — 연결 끊기
+        factory1.destroy();
 
-        // Phase 3: Consumer 재시작 → 다운 중 발행된 메시지 수신
-        Object received2 = template.receiveAndConvert(queueName, 5000);
-        Object received3 = template.receiveAndConvert(queueName, 5000);
+        // Phase 2: Consumer 다운 중 — Producer만 별도 연결로 메시지 발행
+        CachingConnectionFactory producerFactory = new CachingConnectionFactory(
+                rabbit.getHost(), rabbit.getAmqpPort());
+        RabbitTemplate producerTemplate = new RabbitTemplate(producerFactory);
+        producerTemplate.convertAndSend(queueName, "msg-2");
+        producerTemplate.convertAndSend(queueName, "msg-3");
+        producerFactory.destroy();
+
+        // Phase 3: Consumer 재시작 — 새 연결로 다운 중 발행된 메시지 수신
+        CachingConnectionFactory factory2 = new CachingConnectionFactory(
+                rabbit.getHost(), rabbit.getAmqpPort());
+        RabbitTemplate template2 = new RabbitTemplate(factory2);
+
+        Object received2 = template2.receiveAndConvert(queueName, 5000);
+        Object received3 = template2.receiveAndConvert(queueName, 5000);
 
         assertThat(received2.toString()).isEqualTo("msg-2");
         assertThat(received3.toString()).isEqualTo("msg-3");
 
-        factory.destroy();
+        factory2.destroy();
     }
 }

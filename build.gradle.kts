@@ -28,7 +28,10 @@ dependencies {
     // Redis — Pub/Sub (Step 4)
     implementation("org.springframework.boot:spring-boot-starter-data-redis")
 
-    // Kafka — (Step 5-6)
+    // RabbitMQ — (Step 5)
+    implementation("org.springframework.boot:spring-boot-starter-amqp")
+
+    // Kafka — (Step 6-7)
     implementation("org.springframework.kafka:spring-kafka")
 
     // H2 — in-memory DB for tests
@@ -41,6 +44,7 @@ dependencies {
     // Testcontainers
     testImplementation("org.testcontainers:testcontainers:1.20.4")
     testImplementation("org.testcontainers:junit-jupiter:1.20.4")
+    testImplementation("org.testcontainers:rabbitmq:1.20.4")
     testImplementation("org.testcontainers:kafka:1.20.4")
 }
 

@@ -184,6 +184,22 @@ OrderCreatedEvent     → "주문이 생성되었다"   → 이건 Event다
 
 `ApplicationEvent`로 발행했다고 Event가 되는 게 아니다. `Kafka`로 보내도 마찬가지다. **도구가 메시지의 성격을 바꾸지 않는다.**
 
+이벤트 이름도 마찬가지다. 이름이 **"~해라"**면 Command다.
+
+```
+잘못된 이름 (사실상 Command):
+  CreateNotificationEvent    → "알림을 만들어라"
+  DecreaseInventoryEvent     → "재고를 줄여라"
+  InventoryDeductEvent       → "재고를 차감해라"
+
+올바른 이름 (진짜 Event):
+  OrderCreatedEvent          → "주문이 생성되었다"
+  OrderCompletedEvent        → "주문이 완료되었다"
+  OrderCancelledEven         → "주문이 취소되었다"
+```
+
+이벤트는 **"누가 무엇을 해라"가 아니라 "무슨 일이 일어났는가"**를 표현해야 한다. 그래야 알림 서비스는 알림을, 재고 서비스는 재고 차감을, 각자 독립적으로 반응할 수 있다.
+
 Step 0의 판단 기준을 다시 꺼내보자.
 
 > "이 작업이 실패하면 주문도 실패해야 하는가?"

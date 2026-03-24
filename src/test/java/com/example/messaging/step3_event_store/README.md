@@ -33,9 +33,9 @@ void createOrder(CreateOrderCommand cmd) {
 
     // 2. 이벤트 기록 (같은 TX!)
     eventRecordRepository.save(EventRecord.create(
-        "ORDER_CREATED",
-        toJson(OrderCreatedEvent.from(order)),
-        EventStatus.PENDING
+            "ORDER_CREATED",
+            toJson(OrderCreatedEvent.from(order)),
+            EventStatus.PENDING
     ));
 }
 ```
@@ -196,6 +196,10 @@ erDiagram
 ```
 
 `status`가 이 테이블의 핵심이다. PENDING은 "아직 처리 안 됨", PROCESSED는 "처리 완료". 스케줄러는 PENDING만 조회하니까 이미 처리된 건 다시 안 건드린다.
+
+여기서 중요한 관점 전환이 하나 있다. 지금까지는 "트랜잭션으로 원자성을 보장한다"에 집중했다. 근데 Event Store부터는 **"상태 전이를 설계한다"**가 더 중요해진다. PENDING → PROCESSED라는 상태 전이가 "이 이벤트가 처리됐는가?"를 추적하는 유일한 수단이다.
+
+나중에 서비스가 분리되면 "하나의 TX로 전부 묶는" 것이 불가능해진다. 그때는 상태 전이(PENDING → SENT → CONSUMED → PROCESSED)와 보상(실패 시 어떻게 원복하는가)이 트랜잭션을 대체한다. 이 Step의 `status` 컬럼이 그 출발점이다.
 
 ---
 

@@ -76,11 +76,6 @@ public abstract class KafkaTestBase {
 
     protected static List<ConsumerRecord<String, String>> pollMessages(
             KafkaConsumer<String, String> consumer, int expectedCount, Duration timeout) {
-        return pollMessagesStatic(consumer, expectedCount, timeout);
-    }
-
-    static List<ConsumerRecord<String, String>> pollMessagesStatic(
-            KafkaConsumer<String, String> consumer, int expectedCount, Duration timeout) {
         List<ConsumerRecord<String, String>> records = new ArrayList<>();
         long deadline = System.currentTimeMillis() + timeout.toMillis();
         while (records.size() < expectedCount && System.currentTimeMillis() < deadline) {

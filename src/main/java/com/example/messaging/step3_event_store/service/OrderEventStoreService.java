@@ -4,6 +4,8 @@ import com.example.messaging.step3_event_store.domain.EventRecord;
 import com.example.messaging.step3_event_store.domain.Order;
 import com.example.messaging.step3_event_store.repository.EventRecordRepository;
 import com.example.messaging.step3_event_store.repository.OrderRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,11 +18,14 @@ public class OrderEventStoreService {
 
     private final OrderRepository orderRepository;
     private final EventRecordRepository eventRecordRepository;
+    private final ObjectMapper objectMapper;
 
     public OrderEventStoreService(OrderRepository orderRepository,
-                                  EventRecordRepository eventRecordRepository) {
+                                  EventRecordRepository eventRecordRepository,
+                                  ObjectMapper objectMapper) {
         this.orderRepository = orderRepository;
         this.eventRecordRepository = eventRecordRepository;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -32,12 +37,22 @@ public class OrderEventStoreService {
         Order order = new Order(productName, amount);
         orderRepository.save(order);
 
-        String payload = String.format(
-                "{\"orderId\":%d,\"productName\":\"%s\",\"amount\":%d}",
-                order.getId(), productName, amount);
+        String payload = serializePayload(order);
 
         eventRecordRepository.save(new EventRecord("ORDER_CREATED", payload));
 
         return order.getId();
+    }
+
+    private String serializePayload(Order order) {
+        try {
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("orderId", order.getId());
+            node.put("productName", order.getProductName());
+            node.put("amount", order.getAmount());
+            return objectMapper.writeValueAsString(node);
+        } catch (Exception e) {
+            throw new RuntimeException("이벤트 payload 직렬화 실패", e);
+        }
     }
 }

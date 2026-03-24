@@ -3,7 +3,7 @@ package com.example.messaging.step6_kafka.domain;
 import jakarta.persistence.*;
 
 @Entity
-@Table(name = "step5_orders")
+@Table(name = "step6_orders")
 public class Order {
 
     @Id

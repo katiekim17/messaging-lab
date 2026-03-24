@@ -108,7 +108,7 @@ class TransactionalOutboxCompletionTest {
         // Then: Kafka에서 메시지 수신 가능
         try (KafkaConsumer<String, String> consumer = createConsumerFor(KAFKA.getBootstrapServers(), "outbox-verify")) {
             consumer.subscribe(List.of(topic));
-            List<ConsumerRecord<String, String>> records = KafkaTestBase.pollMessagesStatic(consumer, 1, Duration.ofSeconds(10));
+            List<ConsumerRecord<String, String>> records = KafkaTestBase.pollMessages(consumer, 1, Duration.ofSeconds(10));
 
             assertThat(records).hasSize(1);
             assertThat(records.get(0).key()).isEqualTo(orderId.toString());

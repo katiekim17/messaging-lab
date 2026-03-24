@@ -1,83 +1,173 @@
-# Step 3 - Event Store
+# Step 3 — Event Store 학습 테스트
 
-> 이벤트도 데이터다. DB에 같이 저장하면 서버가 죽어도 이벤트는 살아남는다.
-
----
-
-## 이 Step에서 해결하는 문제
-
-Step 2에서 `@Async + @TransactionalEventListener(AFTER_COMMIT)`를 사용했습니다.
-서버가 살아있으면 잘 동작하지만, **비동기 처리 도중 서버가 죽으면 메모리의 이벤트는 증발합니다.**
-
-## 해결 방법
-
-도메인 데이터를 저장할 때 이벤트도 **같은 트랜잭션**으로 DB에 기록합니다.
-스케줄러(릴레이)가 PENDING 이벤트를 주기적으로 읽어서 처리합니다.
+도메인 저장과 이벤트 기록의 원자성을 검증한다.
+스케줄러(릴레이)가 PENDING 이벤트를 처리하는 흐름을 확인한다.
+서버 재시작 후에도 DB에 남아있는 이벤트를 재처리할 수 있음을 증명한다.
 
 ---
 
-## 시퀀스 다이어그램
+## EventStoreAtomicityTest
 
-### 문제: 비동기 이벤트 유실
+도메인 저장과 이벤트 기록의 원자성 — 둘 다 성공하거나, 둘 다 실패해야 한다.
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant OrderService
-    participant DB
-    participant AsyncThread as @Async 스레드
-
-    Client->>OrderService: 주문 생성 요청
-    OrderService->>DB: 주문 저장 (COMMIT)
-    OrderService-->>Client: 200 OK
-    OrderService->>AsyncThread: 이벤트 전달
-
-    Note over AsyncThread: 포인트 적립 시작...
-    Note over AsyncThread: 이 순간 서버 강제 종료!
-    Note over AsyncThread: 포인트 적립 영원히 실행 안 됨
-```
-
-### 해결: Event Store 기록
+### 주문 저장과 이벤트 기록은 하나의 트랜잭션으로 묶인다
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant OrderService
-    participant DB
-    participant EventStore as event_records 테이블
+    participant Test as 테스트
+    participant OS as OrderService
+    participant DB as DB
+    participant ES as event_records
 
-    Client->>OrderService: 주문 생성 요청
+    Note over OS: TX BEGIN
+    OS->>DB: INSERT 주문 (status=CREATED)
+    OS->>ES: INSERT 이벤트 (status=PENDING)
+    Note over OS: TX COMMIT
 
-    Note over OrderService: TX BEGIN
-    OrderService->>DB: 주문 저장
-    OrderService->>EventStore: 이벤트 기록 (status=PENDING)
-    Note over OrderService: TX COMMIT
-
-    OrderService-->>Client: 200 OK
-
-    Note over EventStore: 서버가 죽어도<br/>PENDING 레코드는 DB에 남아있다
+    Test->>DB: 주문 조회 → status=CREATED ✅
+    Test->>ES: 이벤트 조회 → status=PENDING ✅
+    Note over ES: payload에 orderId,<br/>productName 포함
 ```
 
-### 스케줄러 릴레이
+### 주문 저장이 실패하면 이벤트 기록도 함께 롤백된다
 
 ```mermaid
 sequenceDiagram
-    participant Scheduler as 스케줄러 (릴레이)
-    participant EventStore as event_records
-    participant PointService
+    participant Test as 테스트
+    participant OS as OrderService
+    participant DB as DB
+    participant ES as event_records
 
-    loop 주기적 실행
-        Scheduler->>EventStore: SELECT WHERE status = 'PENDING'
-        EventStore-->>Scheduler: PENDING 이벤트 목록
+    Note over OS: TX BEGIN
+    OS->>DB: INSERT 주문 (가격 = -1000)
+    Note over OS: IllegalArgumentException!
+    Note over OS: TX ROLLBACK
 
-        alt 이벤트 존재
-            Scheduler->>PointService: 포인트 적립
-            Scheduler->>EventStore: UPDATE status = 'PROCESSED'
-        end
-    end
+    Test->>DB: findAll() → 비어있음 ✅
+    Test->>ES: findAll() → 비어있음 ✅
+
+    Note over Test: 주문이 실패하면<br/>이벤트도 함께 롤백된다<br/>(원자성 보장)
 ```
 
-### Event Store 테이블 구조
+---
+
+## EventRelayTest
+
+스케줄러(릴레이)가 PENDING 이벤트를 처리하는 흐름.
+
+### 스케줄러는 PENDING 상태의 이벤트를 조회하여 처리한다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant Relay as 스케줄러 (릴레이)
+    participant ES as event_records
+    participant PS as PointService
+
+    Note over ES: PENDING 이벤트 1건<br/>(주문 생성 시 기록됨)
+
+    Relay->>ES: SELECT WHERE status = 'PENDING'
+    ES-->>Relay: 1건 반환
+
+    Relay->>PS: 포인트 적립 (1,500,000 × 1%)
+    Relay->>ES: UPDATE status = 'PROCESSED'
+
+    Test->>PS: 포인트 조회 → amount=15,000 ✅
+    Note over Test: processed count = 1
+```
+
+### 처리 완료된 이벤트는 PROCESSED 상태로 변경된다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant Relay as 스케줄러
+    participant ES as event_records
+
+    Note over ES: PENDING 1건
+
+    Relay->>ES: processEvents()
+    Relay->>ES: UPDATE status = 'PROCESSED'
+
+    Test->>ES: findByStatus(PENDING) → 0건
+    Test->>ES: findByStatus(PROCESSED) → 1건
+    Note over ES: eventType = ORDER_CREATED
+```
+
+### 이미 처리된 이벤트는 다시 처리하지 않는다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant Relay as 스케줄러
+    participant ES as event_records
+    participant PS as PointService
+
+    Note over ES: PENDING 1건
+
+    Relay->>ES: processEvents() → 1건 처리
+    Note over ES: PROCESSED 1건
+
+    Relay->>ES: processEvents() → 0건 처리
+    Note over ES: PENDING이 없으므로<br/>처리할 것이 없다
+
+    Test->>PS: 포인트 조회 → 1건만 존재
+    Note over Test: 중복 적립 없음
+```
+
+---
+
+## EventStoreRecoveryTest
+
+서버 재시작 후에도 PENDING 이벤트가 DB에 남아있어서 재처리 가능.
+
+### 서버 재시작 후에도 PENDING 이벤트는 DB에 남아있다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant OS as OrderService
+    participant DB as DB
+    participant ES as event_records
+
+    OS->>DB: 주문 저장 + COMMIT
+    OS->>ES: 이벤트 기록 (PENDING) + COMMIT
+
+    Note over Test: 릴레이 실행 안 함<br/>(서버 다운 시뮬레이션)
+
+    Test->>ES: findByStatus(PENDING)
+    Note over ES: 1건 존재 ✅<br/>eventType = ORDER_CREATED
+
+    Note over Test: Step 2에서는 이벤트가<br/>메모리에만 있어 증발했지만<br/>여기서는 DB에 남아있다
+```
+
+### 재시작 후 스케줄러가 PENDING 이벤트를 재처리한다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant OS as OrderService
+    participant ES as event_records
+    participant Relay as 스케줄러
+
+    OS->>ES: 주문 2건 생성 → PENDING 2건
+    Note over Test: 릴레이 미실행 (서버 다운)
+
+    Test->>ES: findByStatus(PENDING) → 2건
+
+    Note over Test: === 서버 재시작 ===
+
+    Relay->>ES: processEvents()
+    Note over ES: 2건 모두 PROCESSED
+
+    Test->>ES: findByStatus(PENDING) → 0건 ✅
+    Test->>ES: findByStatus(PROCESSED) → 2건 ✅
+    Note over Test: 두 주문 모두 포인트 적립 완료
+```
+
+---
+
+## Event Store 테이블 구조
 
 ```mermaid
 erDiagram
@@ -93,18 +183,6 @@ erDiagram
 ```
 
 ---
-
-## 테스트 목록
-
-| 테스트 클래스 | 메서드 | 증명하는 것 |
-|---|---|---|
-| EventStoreAtomicityTest | 주문_저장과_이벤트_기록은_하나의_트랜잭션으로_묶인다 | 원자성 (정상) |
-| EventStoreAtomicityTest | 주문_저장이_실패하면_이벤트_기록도_함께_롤백된다 | 원자성 (실패) |
-| EventRelayTest | 스케줄러는_PENDING_상태의_이벤트를_조회하여_처리한다 | 릴레이 동작 |
-| EventRelayTest | 처리_완료된_이벤트는_PROCESSED_상태로_변경된다 | 상태 전이 |
-| EventRelayTest | 이미_처리된_이벤트는_다시_처리하지_않는다 | 중복 방지 |
-| EventStoreRecoveryTest | 서버_재시작_후에도_PENDING_이벤트는_DB에_남아있다 | 내구성 |
-| EventStoreRecoveryTest | 재시작_후_스케줄러가_PENDING_이벤트를_재처리한다 | 복구 가능성 |
 
 ## 학습 포인트
 

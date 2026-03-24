@@ -1,79 +1,132 @@
-# Step 0 - Command vs Event
+# Step 0 — Command vs Event 학습 테스트
 
-> 같은 메시지 인프라를 쓰더라도, 안에 담기는 것의 **의미**가 다르면 Consumer의 책임이 완전히 달라진다.
-
----
-
-## 학습 목표
-
-- Command와 Event의 본질적 차이를 구분한다
-- 같은 인프라라도 담기는 내용에 따라 설계가 달라짐을 이해한다
-
-## 핵심 구분
-
-| 구분 | Command | Event |
-|------|---------|-------|
-| 의미 | "~해라" (아직 일어나지 않은 일) | "~되었다" (이미 확정된 사실) |
-| 시제 | 미래/명령 | 과거/완료 |
-| 실패 | 실패할 수 있다 | 이미 일어났으므로 실패 개념 없음 |
-| 방향 | 1:1 (발신자가 수신자를 안다) | 1:N (발행자는 누가 듣는지 모른다) |
-| 결합도 | 높음 (수신자에 의존) | 낮음 (발행자는 독립적) |
-| 예시 | IssueCouponCommand | OrderCreatedEvent |
+Command와 Event의 구조적/행동적 차이를 순수 Java 객체로 확인한다.
+Spring 컨텍스트 없이 실행되며, 개념이 인프라에 독립적임을 보여준다.
 
 ---
 
-## 시퀀스 다이어그램
+## CommandEventConceptTest
 
-### Command 흐름: 1:1 지시
+Command와 Event의 구조적 차이 — 시제, 방향, occurredAt 유무.
+
+### Command는 미래시제다 — 아직 일어나지 않은 일
 
 ```mermaid
 sequenceDiagram
-    participant OrderService
-    participant CouponService
+    participant Test as 테스트
+    participant Cmd as IssueCouponCommand
 
-    OrderService->>CouponService: IssueCouponCommand(userId, couponType)
-    Note right of CouponService: 아직 일어나지 않은 일<br/>실패할 수 있다
-    alt 성공
-        CouponService-->>OrderService: 발급 완료
-    else 실패
-        CouponService-->>OrderService: 발급 실패 (재고 소진)
-        Note left of OrderService: 발신자가 실패를 알고<br/>대응해야 한다
-    end
+    Test->>Cmd: new IssueCouponCommand(userId, couponType)
+
+    Note over Cmd: userId = "user-1"
+    Note over Cmd: couponType = "WELCOME"
+    Note over Cmd: occurredAt = ❌ 없음
+
+    Note over Test: Command는 "해라"<br/>아직 실행 전이므로<br/>occurredAt이 없다
 ```
 
-### Event 흐름: 1:N 통지
+### Event는 과거시제다 — 이미 확정된 사실
 
 ```mermaid
 sequenceDiagram
-    participant OrderService
-    participant EventBus
-    participant CouponListener
-    participant PointListener
-    participant NotificationListener
+    participant Test as 테스트
+    participant Evt as OrderCreatedEvent
 
-    OrderService->>EventBus: OrderCreatedEvent(orderId, userId, amount)
-    Note right of EventBus: 이미 확정된 사실<br/>발행자는 누가 듣는지 모른다
+    Test->>Evt: new OrderCreatedEvent(orderId, userId, amount, now)
 
-    EventBus->>CouponListener: OrderCreatedEvent
-    EventBus->>PointListener: OrderCreatedEvent
-    EventBus->>NotificationListener: OrderCreatedEvent
+    Note over Evt: orderId = "order-1"
+    Note over Evt: amount = 50000
+    Note over Evt: occurredAt = ✅ Instant.now()
 
-    Note over OrderService: 리스너가 0개든 10개든<br/>OrderService 코드는 동일
+    Note over Test: Event는 "되었다"<br/>이미 확정된 사실이므로<br/>occurredAt이 항상 있다
+```
+
+### Command는 수신자를 특정한다 — 1:1
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant Cmd as IssueCouponCommand
+    participant Handler as CouponCommandHandler
+
+    Test->>Cmd: new IssueCouponCommand(userId, couponType)
+    Test->>Handler: handle(command)
+    Handler-->>Test: Coupon(userId)
+
+    Note over Test: 발신자가 handler를<br/>직접 지정한다 (1:1)
+```
+
+### Event는 수신자를 모른다 — 1:N
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant Evt as OrderCreatedEvent
+    participant L1 as couponListener
+    participant L2 as pointListener
+    participant L3 as notificationListener
+
+    Test->>Evt: new OrderCreatedEvent(...)
+    Note over Test: 리스너 목록을 Event가<br/>알지 못한다
+
+    Evt->>L1: onEvent()
+    Evt->>L2: onEvent()
+    Evt->>L3: onEvent()
+
+    Note over Test: 리스너가 0개든 10개든<br/>발행자 코드는 동일
 ```
 
 ---
 
-## 테스트 목록
+## CommandEventBehaviorTest
 
-| 테스트 클래스 | 메서드 | 증명하는 것 |
-|---|---|---|
-| CommandEventConceptTest | Command는_미래시제다_아직_일어나지_않은_일 | Command에는 occurredAt이 없다 |
-| CommandEventConceptTest | Event는_과거시제다_이미_확정된_사실 | Event에는 항상 occurredAt이 있다 |
-| CommandEventConceptTest | Command는_수신자를_특정한다_1대1 | 발신자가 handler를 직접 호출 |
-| CommandEventConceptTest | Event는_수신자를_모른다_1대N | 리스너가 몇 개든 발행자 코드 동일 |
-| CommandEventBehaviorTest | Command는_실패할_수_있고_발신자가_처리해야_한다 | 예외 발생 시 발신자 책임 |
-| CommandEventBehaviorTest | Event는_이미_일어난_사실이므로_발행_자체는_실패하지_않는다 | 발행은 항상 성공 |
-| CommandEventBehaviorTest | 같은_도메인에서_Command_실행_결과가_Event가_된다 | Command → 실행 → Event 흐름 |
+Command와 Event의 행동 차이 — 실패 가능성, 책임 소재, 그리고 Command → Event 흐름.
+
+### Command는 실패할 수 있고 발신자가 처리해야 한다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant Handler as CouponCommandHandler<br/>(재고 = 0)
+
+    Test->>Handler: handle(IssueCouponCommand)
+    Handler-->>Test: IllegalStateException<br/>"재고 소진"
+
+    Note over Test: 실패 시 발신자가<br/>예외를 처리해야 한다
+```
+
+### Event는 이미 일어난 사실이므로 발행 자체는 실패하지 않는다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant List as List<Event>
+
+    Test->>List: add(OrderCreatedEvent)
+
+    Note over List: 항상 성공
+    Note over Test: 이미 일어난 사실을<br/>기록하는 것이므로<br/>실패 개념이 없다
+```
+
+### 같은 도메인에서 Command 실행 결과가 Event가 된다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant Domain as 도메인 로직
+    participant Evt as OrderCreatedEvent
+
+    Test->>Domain: CreateOrderCommand(userId, amount)
+    Domain->>Domain: 주문 생성 (도메인 로직)
+    Domain-->>Test: Order(orderId)
+
+    Test->>Evt: new OrderCreatedEvent(orderId, amount, now)
+
+    Note over Test: Command 실행 → 성공 → Event 생성
+    Note over Evt: orderId = 생성된 주문의 ID<br/>amount = Command의 amount<br/>occurredAt = 확정 시각
+```
+
+---
 
 ## 학습 포인트
 

@@ -1,120 +1,177 @@
-# Step 1 - Application Event
+# Step 1 — Application Event 학습 테스트
 
-> 직접 호출을 이벤트로 끊으면, 발행자는 누가 듣는지 몰라도 된다.
-
----
-
-## 학습 목표
-
-- 직접 호출 방식의 결합도 문제를 체험한다
-- ApplicationEventPublisher로 전환 후 의존성이 제거되는 걸 확인한다
-- @EventListener 내부 예외가 발행자 트랜잭션을 롤백시키는 한계를 발견한다
+직접 호출 방식의 결합도 문제를 체험하고,
+ApplicationEventPublisher로 전환 후 의존성이 제거되는 것을 확인한다.
+@EventListener 내부 예외가 발행자 트랜잭션을 롤백시키는 한계를 발견한다.
 
 ---
 
-## 시퀀스 다이어그램
+## DirectCallCouplingTest
 
-### Before: 직접 호출 - 높은 결합도
+직접 호출 방식의 결합도 문제 — 의존성 개수, 장애 전파, 정상 흐름.
+
+### 직접 호출 방식에서 OrderService는 모든 후속 서비스에 의존한다
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant OrderService
-    participant StockService
-    participant CouponService
-    participant PointService
+    participant Test as 테스트
+    participant OS as DirectOrderService
 
-    Client->>OrderService: 주문 생성 요청
-    OrderService->>OrderService: 주문 저장
+    Test->>OS: 생성자 파라미터 검사 (리플렉션)
 
-    OrderService->>StockService: 재고 차감
-    StockService-->>OrderService: OK
+    Note over OS: 파라미터 4개:<br/>OrderRepository<br/>StockService<br/>CouponService<br/>PointService
 
-    OrderService->>CouponService: 쿠폰 발급
-    CouponService-->>OrderService: OK
-
-    OrderService->>PointService: 포인트 적립
-    PointService-->>OrderService: OK
-
-    OrderService-->>Client: 주문 완료
-
-    Note over OrderService: OrderService가 3개 서비스를<br/>모두 알고 있다 (결합도 높음)
-    Note over OrderService: 후속 로직 추가할 때마다<br/>OrderService 수정 필요
+    Note over Test: 후속 서비스가 추가될 때마다<br/>OrderService 생성자를 수정해야 한다
 ```
 
-### After: Application Event - 느슨한 결합
+### 직접 호출 방식에서 후속 처리 실패시 주문도 롤백된다
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant OrderService
-    participant EventPublisher
-    participant StockListener
-    participant CouponListener
-    participant PointListener
+    participant Test as 테스트
+    participant OS as DirectOrderService
+    participant DB as OrderRepository
+    participant PS as PointService<br/>(shouldFail=true)
 
-    Client->>OrderService: 주문 생성 요청
-    OrderService->>OrderService: 주문 저장
-    OrderService->>EventPublisher: publish(OrderCreatedEvent)
-    Note right of EventPublisher: OrderService는 누가<br/>듣는지 모른다
+    Note over OS: TX BEGIN
+    OS->>DB: 주문 저장
+    OS->>PS: 포인트 적립
+    PS--xOS: RuntimeException!<br/>"포인트 적립 실패"
+    Note over OS: TX ROLLBACK
 
-    EventPublisher->>StockListener: OrderCreatedEvent
-    EventPublisher->>CouponListener: OrderCreatedEvent
-    EventPublisher->>PointListener: OrderCreatedEvent
+    Test->>DB: findAll()
+    Note over DB: 비어있음 (주문도 롤백됨)
 
-    StockListener-->>EventPublisher: OK
-    CouponListener-->>EventPublisher: OK
-    PointListener-->>EventPublisher: OK
-
-    OrderService-->>Client: 주문 완료
-
-    Note over OrderService: OrderService의 의존성은<br/>EventPublisher 하나뿐
+    Note over Test: 포인트 실패 때문에<br/>주문이 취소되는 건<br/>우리가 원한 게 아니다
 ```
 
-### Trap: 리스너 예외가 발행자를 롤백시킨다
+### 직접 호출 방식에서 모든 후속 처리가 성공하면 주문이 완료된다
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant OrderService
-    participant EventPublisher
-    participant StockListener
-    participant PointListener
+    participant Test as 테스트
+    participant OS as DirectOrderService
+    participant DB as OrderRepository
 
-    Client->>OrderService: 주문 생성 요청
-    Note over OrderService: TX BEGIN
+    Note over OS: TX BEGIN
+    OS->>DB: 주문 저장
+    OS->>OS: 재고 차감 + 쿠폰 발급 + 포인트 적립
+    Note over OS: TX COMMIT
 
-    OrderService->>OrderService: 주문 저장
-    OrderService->>EventPublisher: publish(OrderCreatedEvent)
-
-    EventPublisher->>StockListener: OrderCreatedEvent
-    StockListener-->>EventPublisher: OK
-
-    EventPublisher->>PointListener: OrderCreatedEvent
-    PointListener--xEventPublisher: RuntimeException!
-
-    Note over OrderService: 리스너 예외가 전파됨
-    Note over OrderService: TX ROLLBACK - 주문까지 취소됨!
-
-    OrderService-->>Client: 500 Error
-
-    Note over Client,PointListener: 포인트 적립 실패 때문에<br/>주문이 취소되는 건<br/>우리가 원한 게 아니다
+    Test->>DB: findAll()
+    Note over DB: 주문 1건, status=CREATED
 ```
 
 ---
 
-## 테스트 목록
+## ApplicationEventDecouplingTest
 
-| 테스트 클래스 | 메서드 | 증명하는 것 |
-|---|---|---|
-| DirectCallCouplingTest | 직접_호출_방식에서_OrderService는_모든_후속_서비스에_의존한다 | 생성자 의존성 개수로 결합도 증명 |
-| DirectCallCouplingTest | 직접_호출_방식에서_후속_처리_실패시_주문도_롤백된다 | 강한 결합의 부작용 |
-| DirectCallCouplingTest | 직접_호출_방식에서_모든_후속_처리가_성공하면_주문이_완료된다 | 정상 흐름 |
-| ApplicationEventDecouplingTest | 이벤트_방식에서_OrderService는_EventPublisher에만_의존한다 | 의존성 제거 확인 |
-| ApplicationEventDecouplingTest | 이벤트_발행_후_리스너가_정상_처리하면_모든_데이터가_저장된다 | 정상 흐름 |
-| ApplicationEventDecouplingTest | 후속_로직_추가시_OrderService는_수정하지_않아도_된다 | OCP 원칙 |
-| EventListenerExceptionTest | 리스너_예외가_발행자_트랜잭션을_롤백시킨다 | 핵심 한계 발견 |
-| EventListenerExceptionTest | EventListener는_발행자와_같은_스레드에서_동기적으로_실행된다 | 동일 TX 증명 |
+ApplicationEventPublisher로 전환 — 의존성 제거, OCP 달성.
+
+### 이벤트 방식에서 OrderService는 EventPublisher에만 의존한다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant OS as EventedOrderService
+
+    Test->>OS: 생성자 파라미터 검사 (리플렉션)
+
+    Note over OS: 파라미터 2개:<br/>OrderRepository<br/>ApplicationEventPublisher
+
+    Note over Test: 4개 → 2개로 감소<br/>StockService, CouponService,<br/>PointService 의존성 제거
+```
+
+### 이벤트 발행 후 리스너가 정상 처리하면 모든 데이터가 저장된다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant OS as EventedOrderService
+    participant EP as EventPublisher
+    participant PL as PointEventListener
+    participant DB as DB
+
+    OS->>DB: 주문 저장
+    OS->>EP: publish(OrderCreatedEvent)
+    EP->>PL: onOrderCreated(event)
+    PL->>DB: 포인트 저장 (50000 × 0.01 = 500)
+
+    Test->>DB: 주문 조회 → status=CREATED
+    Test->>DB: 포인트 조회 → amount=500
+```
+
+### 후속 로직 추가시 OrderService는 수정하지 않아도 된다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant OS as EventedOrderService
+    participant EP as EventPublisher
+    participant PL as PointListener
+    participant NL as 새 NotificationListener
+
+    OS->>EP: publish(OrderCreatedEvent)
+    EP->>PL: 기존 리스너
+    EP->>NL: 새로 추가된 리스너
+
+    Test->>OS: 생성자 파라미터 검사
+    Note over OS: 여전히 2개<br/>(OrderRepository + EventPublisher)
+
+    Note over Test: 리스너 추가만으로 확장<br/>OrderService 코드 수정 없음 (OCP)
+```
+
+---
+
+## EventListenerExceptionTest
+
+@EventListener의 핵심 한계 — 리스너 예외가 발행자 트랜잭션을 롤백시킨다.
+이 한계가 Step 2로 넘어가는 동기가 된다.
+
+### 리스너 예외가 발행자 트랜잭션을 롤백시킨다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant OS as EventedOrderService
+    participant EP as EventPublisher
+    participant PL as PointEventListener<br/>(shouldFail=true)
+    participant DB as OrderRepository
+
+    Note over OS: TX BEGIN
+    OS->>DB: 주문 저장
+    OS->>EP: publish(OrderCreatedEvent)
+    EP->>PL: onOrderCreated(event)
+    PL--xEP: RuntimeException!<br/>"포인트 적립 실패"
+
+    Note over OS: 리스너 예외가 전파됨
+    Note over OS: TX ROLLBACK — 주문까지 취소!
+
+    Test->>DB: findAll()
+    Note over DB: 비어있음
+
+    Note over Test: 직접 호출 때와 같은 문제!<br/>이벤트로 끊었는데도<br/>같은 TX에서 실행되기 때문
+```
+
+### EventListener는 발행자와 같은 스레드에서 동기적으로 실행된다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant OS as EventedOrderService
+    participant EP as EventPublisher
+    participant PL as PointEventListener
+
+    Note over Test: callerThread = Thread.currentThread()
+
+    OS->>EP: publish(OrderCreatedEvent)
+    EP->>PL: onOrderCreated(event)
+    Note over PL: 같은 스레드에서 실행<br/>같은 TX에 참여
+
+    Note over Test: listenerThread == callerThread<br/>→ 동기적, 동일 TX
+```
+
+---
 
 ## 학습 포인트
 

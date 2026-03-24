@@ -1,101 +1,260 @@
-# Step 6 - Idempotent Consumer & Failure Isolation
+# Step 6 — Idempotent Consumer 학습 테스트
 
-> 메시지가 몇 번 오든 결과는 딱 한 번만 반영되어야 하고,
-> 처리 불가능한 메시지는 격리되어야 한다.
-
----
-
-## 학습 목표
-
-- At Least Once 환경에서 중복 소비가 발생하는 상황을 체험한다
-- 멱등 처리 패턴을 구현하고, 각 패턴의 트레이드오프를 이해한다
-- 멱등 처리조차 실패하는 메시지를 DLQ로 격리하는 개념을 이해한다
+At Least Once 환경에서 중복 소비가 발생하는 문제를 체험한다.
+세 가지 멱등 패턴을 구현하고 트레이드오프를 비교한다.
+처리 불가능한 메시지(poison pill)를 DLQ로 격리하는 개념을 확인한다.
 
 ---
 
-## 시퀀스 다이어그램
+## DuplicateConsumptionProblemTest
 
-### 중복 소비가 발생하는 이유
+멱등 처리 없이 같은 메시지를 2번 소비하면 데이터가 2번 반영되는 문제.
+
+### 같은 메시지를 2번 소비하면 포인트가 2번 적립된다
 
 ```mermaid
 sequenceDiagram
-    participant Kafka
-    participant Consumer
-    participant DB
+    participant Kafka as Kafka
+    participant Cons as NaiveConsumer
+    participant DB as PointAccount
 
-    Kafka->>Consumer: 1. 메시지 전달 (offset 5)
-    Consumer->>DB: 2. 포인트 적립 (성공)
-    Note over Consumer: 3. offset commit 직전에 죽음!
+    Kafka->>Cons: consume(eventId, userId, 100)
+    Cons->>DB: balance += 100
+    Note over DB: balance = 100
 
-    Consumer->>Consumer: 4. Consumer 재시작
-    Kafka->>Consumer: 5. 같은 메시지 재전달 (offset 5)
-    Consumer->>DB: 6. 포인트 또 적립 (중복!)
+    Note over Cons: offset commit 직전에 크래시!<br/>재시작 후 같은 메시지 재전달
+
+    Kafka->>Cons: consume(eventId, userId, 100)
+    Cons->>DB: balance += 100
+    Note over DB: balance = 200 ❌
+
+    Note over DB: 기대값: 100<br/>실제값: 200 (중복 적립!)
 ```
 
-### 패턴 1: event_handled 테이블 (범용)
+---
+
+## EventHandledIdempotencyTest
+
+event_handled 테이블로 중복을 방어하는 패턴 — 범용, 어떤 도메인이든 적용 가능.
+
+### event_handled 테이블에 이미 처리된 이벤트가 있으면 스킵한다
 
 ```mermaid
 sequenceDiagram
-    participant Consumer
+    participant Cons as Consumer
     participant EH as event_handled
-    participant DB
+    participant DB as PointAccount
 
-    Consumer->>EH: event_id 존재 확인
-    EH-->>Consumer: 없음
-    Consumer->>DB: 비즈니스 로직 실행
-    Consumer->>EH: event_id 기록
+    Note over Cons: 1차 소비 (evt-001)
+    Cons->>EH: evt-001 존재 확인
+    EH-->>Cons: 없음
+    Cons->>DB: balance += 100
+    Cons->>EH: evt-001 기록
+    Note over Cons: return true
 
-    Note over Consumer,DB: --- 같은 메시지 재전달 ---
+    Note over Cons: 2차 소비 (같은 evt-001)
+    Cons->>EH: evt-001 존재 확인
+    EH-->>Cons: 이미 있음
+    Cons-->>Cons: SKIP
+    Note over Cons: return false
 
-    Consumer->>EH: event_id 존재 확인
-    EH-->>Consumer: 이미 있음
-    Consumer-->>Consumer: SKIP
+    Note over DB: balance = 100 ✅ (중복 없음)
 ```
 
-### 패턴 2: Upsert (집계성 데이터)
+### 서로 다른 event_id의 메시지는 각각 정상 처리된다
 
 ```mermaid
 sequenceDiagram
-    participant Consumer
-    participant DB
+    participant Cons as Consumer
+    participant EH as event_handled
+    participant DB as PointAccount
 
-    Note over Consumer: "상품 1001 조회수 = 150"
-    Consumer->>DB: UPSERT (productId=1001, count=150)
-    Note over DB: 최종 상태를 덮어쓰므로<br/>몇 번 실행해도 결과 동일
+    Cons->>EH: evt-001 확인 → 없음
+    Cons->>DB: balance += 100
+    Cons->>EH: evt-001 기록
+
+    Cons->>EH: evt-002 확인 → 없음
+    Cons->>DB: balance += 200
+    Cons->>EH: evt-002 기록
+
+    Note over DB: balance = 300 ✅
+    Note over EH: 2건 기록
 ```
 
-### 패턴 3: version 비교 (순서 보호)
+---
+
+## UpsertIdempotencyTest
+
+Upsert 패턴 — 집계성 데이터(조회수, 좋아요수)에 적합한 멱등 패턴.
+
+### 같은 이벤트를 2번 처리해도 upsert로 올바른 결과가 유지된다
 
 ```mermaid
 sequenceDiagram
-    participant Consumer
-    participant DB
+    participant Cons as Consumer
+    participant DB as ProductViewCount
 
-    Note over Consumer: v3: "재고 = 50"
-    Consumer->>DB: 현재 version = 2
-    Consumer->>DB: UPDATE stock=50, version=3
+    Cons->>DB: UPSERT (productId=1001, count=150)
+    Note over DB: count = 150
 
-    Note over Consumer: v2: "재고 = 80" (지연 도착)
-    Consumer->>DB: 현재 version = 3
-    Consumer-->>Consumer: v2 < v3 -> SKIP
+    Cons->>DB: UPSERT (productId=1001, count=150)
+    Note over DB: count = 150 (덮어쓰기)
+
+    Note over DB: 몇 번 실행해도<br/>결과 동일 ✅ (150, not 300)
 ```
 
-### DLQ (Dead Letter Queue)
+### upsert는 최신 값으로 덮어쓰므로 최종 상태가 보장된다
 
 ```mermaid
 sequenceDiagram
+    participant Cons as Consumer
+    participant DB as ProductViewCount
+
+    Cons->>DB: UPSERT (productId=1001, count=100)
+    Note over DB: count = 100
+
+    Cons->>DB: UPSERT (productId=1001, count=150)
+    Note over DB: count = 150 (최신 값으로 덮어쓰기)
+
+    Note over DB: 최종 상태가 항상 보장 ✅
+```
+
+### 다른 상품의 이벤트는 각각 독립적으로 upsert된다
+
+```mermaid
+sequenceDiagram
+    participant Cons as Consumer
+    participant DB as ProductViewCount
+
+    Cons->>DB: UPSERT (productId=1001, count=150)
+    Cons->>DB: UPSERT (productId=1002, count=80)
+
+    Note over DB: productId=1001: count=150<br/>productId=1002: count=80<br/>독립적 집계 ✅
+```
+
+---
+
+## VersionComparisonIdempotencyTest
+
+version 비교 패턴 — 중복뿐 아니라 순서 역전까지 방어.
+
+### version이 현재보다 높은 이벤트만 반영된다
+
+```mermaid
+sequenceDiagram
+    participant Cons as Consumer
+    participant DB as StockRecord
+
+    Cons->>DB: consume(1001, stock=100, v1)
+    Note over DB: stock=100, version=1
+
+    Cons->>DB: consume(1001, stock=80, v2)
+    Note over DB: v2 > v1 → 반영
+    Note over DB: stock=80, version=2 ✅
+```
+
+### version이 현재보다 낮거나 같은 이벤트는 무시된다
+
+```mermaid
+sequenceDiagram
+    participant Cons as Consumer
+    participant DB as StockRecord
+
+    Cons->>DB: consume(1001, stock=100, v1)
+    Note over DB: stock=100, version=1
+
+    Cons->>DB: consume(1001, stock=80, v3)
+    Note over DB: v3 > v1 → 반영
+    Note over DB: stock=80, version=3
+
+    Cons->>DB: consume(1001, stock=90, v2)
+    Note over DB: v2 < v3 → SKIP ❌
+    Note over DB: stock=80 유지, version=3 ✅
+```
+
+### 순서가 역전된 이벤트 시퀀스에서 최종 상태가 올바르다
+
+```mermaid
+sequenceDiagram
+    participant Cons as Consumer
+    participant DB as StockRecord
+
+    Cons->>DB: v1 도착 (stock=100)
+    Note over DB: stock=100, version=1
+
+    Cons->>DB: v3 먼저 도착 (stock=50)
+    Note over DB: v3 > v1 → 반영<br/>stock=50, version=3
+
+    Cons->>DB: v2 지연 도착 (stock=80)
+    Note over DB: v2 < v3 → SKIP
+
+    Cons->>DB: v4 도착 (stock=30)
+    Note over DB: v4 > v3 → 반영<br/>stock=30, version=4
+
+    Note over DB: 최종: stock=30, version=4 ✅<br/>순서 역전에도 올바른 결과
+```
+
+---
+
+## PoisonPillAndDlqTest
+
+Poison pill이 Consumer를 막는 문제와 DLQ 격리.
+Spring Kafka의 ErrorHandler 대신 순수 Kafka API로 개념을 증명한다.
+
+### 파싱 불가능한 메시지가 Consumer를 막는다
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Kafka as Kafka
+    participant Cons as Consumer
+
+    Prod->>Kafka: valid JSON
+    Prod->>Kafka: "{{{{invalid json" (poison pill)
+    Prod->>Kafka: valid JSON
+
+    Cons->>Kafka: poll → 3건 수신
+
+    Cons->>Cons: 1번째: 파싱 성공 ✅
+    Cons->>Cons: 2번째: 파싱 실패 ❌
+    Cons->>Cons: 3번째: 파싱 성공 ✅
+
+    Note over Cons: failureCount = 1<br/>successCount = 2<br/>재시도하면 poison pill이<br/>Consumer를 영구적으로 막을 수 있다
+```
+
+### 처리 실패한 메시지를 DLQ 토픽으로 격리할 수 있다
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
     participant Kafka as Source Topic
-    participant Consumer
+    participant Cons as Consumer
     participant DLQ as DLQ Topic
 
-    Kafka->>Consumer: poison pill 메시지
-    Consumer->>Consumer: 파싱 실패!
-    Consumer->>DLQ: 격리 (DLQ로 이동)
+    Prod->>Kafka: valid, "{{{{invalid", valid
 
-    Kafka->>Consumer: 다음 정상 메시지
-    Consumer->>Consumer: 정상 처리
+    Cons->>Kafka: poll → 3건
 
-    Note over DLQ: 운영자가 DLQ 메시지를<br/>수동 확인/재처리
+    rect rgb(230, 255, 230)
+        Cons->>Cons: 1번째: 성공 ✅
+    end
+
+    rect rgb(255, 230, 230)
+        Cons->>Cons: 2번째: 파싱 실패
+        Cons->>DLQ: 격리 (DLQ로 전송)
+    end
+
+    rect rgb(230, 255, 230)
+        Cons->>Cons: 3번째: 성공 ✅
+    end
+
+    Note over Cons: successCount = 2
+
+    participant DLQCons as DLQ Consumer
+    DLQCons->>DLQ: poll
+    Note over DLQCons: 1건 수신<br/>value = "{{{{invalid json"
+
+    Note over DLQ: DLQ는 버리는 곳이 아니라<br/>나중에 수동 확인/재처리할 수 있는<br/>격리 공간
 ```
 
 ---
@@ -109,29 +268,6 @@ sequenceDiagram
 | version / updated_at 비교 | 순서 역전까지 방어해야 하는 경우 | 구현 복잡도 높음 |
 
 ---
-
-## 테스트 목록
-
-### 전반부: 멱등 처리
-
-| 테스트 클래스 | 메서드 | 증명하는 것 |
-|---|---|---|
-| DuplicateConsumptionProblemTest | 같은_메시지를_2번_소비하면_포인트가_2번_적립된다 | 문제 체험 |
-| EventHandledIdempotencyTest | event_handled_테이블에_이미_처리된_이벤트가_있으면_스킵한다 | 패턴 1 검증 |
-| EventHandledIdempotencyTest | 서로_다른_event_id의_메시지는_각각_정상_처리된다 | 정상 흐름 |
-| UpsertIdempotencyTest | 같은_이벤트를_2번_처리해도_upsert로_올바른_결과가_유지된다 | 패턴 2 검증 |
-| UpsertIdempotencyTest | upsert는_최신_값으로_덮어쓰므로_최종_상태가_보장된다 | 덮어쓰기 |
-| UpsertIdempotencyTest | 다른_상품의_이벤트는_각각_독립적으로_upsert된다 | 독립성 |
-| VersionComparisonIdempotencyTest | version이_현재보다_높은_이벤트만_반영된다 | 패턴 3 검증 |
-| VersionComparisonIdempotencyTest | version이_현재보다_낮거나_같은_이벤트는_무시된다 | 역전 방어 |
-| VersionComparisonIdempotencyTest | 순서가_역전된_이벤트_시퀀스에서_최종_상태가_올바르다 | 종합 검증 |
-
-### 후반부: 실패 격리
-
-| 테스트 클래스 | 메서드 | 증명하는 것 |
-|---|---|---|
-| PoisonPillAndDlqTest | 파싱_불가능한_메시지가_Consumer를_막는다 | 문제 체험 |
-| PoisonPillAndDlqTest | 처리_실패한_메시지를_DLQ_토픽으로_격리할_수_있다 | DLQ 격리 |
 
 ## 학습 포인트
 

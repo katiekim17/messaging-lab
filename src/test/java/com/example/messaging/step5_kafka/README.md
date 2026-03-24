@@ -1,85 +1,216 @@
-# Step 5 - Kafka
+# Step 5 — Kafka 학습 테스트
 
-> 메시지가 로그로 보존된다. 여러 Consumer가 각자 속도로 독립적으로 읽는다.
-> Step 3의 Event Store를 Kafka로 릴레이하면 - Transactional Outbox Pattern이 완성된다.
-
----
-
-## 핵심 개념
-
-### Kafka 로그 모델
-
-메시지는 토픽의 파티션에 **append-only 로그**로 기록된다.
-Consumer는 각자의 offset을 관리하며, 같은 메시지를 여러 Consumer Group이 독립적으로 읽을 수 있다.
-
-### Redis Pub/Sub vs Kafka
-
-| 특성 | Redis Pub/Sub | Kafka |
-|------|:---:|:---:|
-| 메시지 보존 | X (즉시 폐기) | O (로그에 보존) |
-| 구독자 없을 때 | 유실 | 보존 |
-| Consumer 재시작 | 놓친 메시지 없음 | offset부터 이어 읽기 |
-| 다중 Consumer | 브로드캐스트 | Consumer Group별 독립 소비 |
-
-### Fan-Out vs Competing Consumers
-
-Kafka는 두 가지 메시징 패턴을 모두 지원한다:
-
-- **Fan-Out**: 서로 다른 Consumer Group이 같은 메시지를 독립적으로 소비 (정산 Group + 알림 Group)
-- **Competing Consumers**: 같은 Consumer Group 내 여러 인스턴스가 파티션을 나눠 부하 분산
-
-Redis Pub/Sub은 Fan-Out만 가능했지만, Kafka는 Consumer Group 개념으로 두 패턴을 동시에 지원한다.
+Kafka의 메시지 보존, Consumer Group 독립성, 파티션 기반 순서 보장을 확인한다.
+Step 3의 Event Store를 Kafka로 릴레이하면 Transactional Outbox Pattern이 완성된다.
 
 ---
 
-## 시퀀스 다이어그램
+## KafkaBasicPipelineTest
 
-### Consumer Group 독립성
+Kafka Producer → Consumer 기본 파이프라인.
 
-```mermaid
-sequenceDiagram
-    participant Producer
-    participant Kafka as Kafka (Topic: order-events)
-    participant GroupA as Consumer Group A (정산)
-    participant GroupB as Consumer Group B (알림)
-
-    Producer->>Kafka: msg-1, msg-2, msg-3, msg-4, msg-5
-
-    GroupA->>Kafka: poll (offset 0~2)
-    Kafka-->>GroupA: msg-1, msg-2, msg-3
-    Note over GroupA: 3건 처리 후 commit (offset=3)
-
-    GroupB->>Kafka: poll (offset 0~4)
-    Kafka-->>GroupB: msg-1, msg-2, msg-3, msg-4, msg-5
-    Note over GroupB: 5건 전부 처리
-
-    Note over GroupA: 재시작 후 offset 3부터 이어 읽기
-    GroupA->>Kafka: poll (offset 3~)
-    Kafka-->>GroupA: msg-4, msg-5
-
-    Note over GroupA,GroupB: 각 Group은 독립적인 offset을 관리한다
-```
-
-### 같은 Key -> 같은 Partition -> 순서 보장
+### Producer가 보낸 메시지를 Consumer가 수신한다
 
 ```mermaid
 sequenceDiagram
-    participant Producer
-    participant Kafka
+    participant Test as 테스트
+    participant Prod as Producer
+    participant Kafka as Kafka (1 partition)
+    participant Cons as Consumer
 
-    Producer->>Kafka: key=order-1001, "생성"
-    Producer->>Kafka: key=order-1002, "생성"
-    Producer->>Kafka: key=order-1001, "결제"
-    Producer->>Kafka: key=order-1001, "배송"
+    Prod->>Kafka: send(key="key-1", value="주문이 생성되었다")
+    Cons->>Kafka: subscribe + poll
 
-    Note over Kafka: Partition 0: [order-1002:생성]
-    Note over Kafka: Partition 1: [order-1001:생성, 결제, 배송]
-    Note over Kafka: 같은 key(1001)는 항상 같은 파티션<br/>-> 순서 보장
+    Kafka-->>Cons: 1건 수신
+
+    Note over Test: key = "key-1" ✅<br/>value = "주문이 생성되었다" ✅
 ```
 
-### Transactional Outbox Pattern 완성
+### 여러 메시지를 순서대로 발행하면 같은 파티션에서 순서대로 소비된다
 
-Step 3과 Step 5가 각각 어떤 문제를 해결하고, 합쳐져서 Outbox가 되는지를 보여줍니다.
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Kafka as Kafka (1 partition)
+    participant Cons as Consumer
+
+    Prod->>Kafka: key="order-1", "생성"
+    Prod->>Kafka: key="order-1", "결제"
+    Prod->>Kafka: key="order-1", "배송"
+
+    Cons->>Kafka: poll
+
+    Note over Cons: 수신 순서:<br/>1. "생성"<br/>2. "결제"<br/>3. "배송"<br/>파티션 내 순서 보장 ✅
+```
+
+---
+
+## KafkaMessagePreservationTest
+
+Kafka의 메시지 보존 — Consumer가 중지되어도 메시지는 로그에 남아있다.
+
+### Consumer가 중지된 사이에 발행된 메시지를 재시작 후 이어서 읽는다
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Kafka as Kafka
+    participant CA as ConsumerA
+    participant CB as ConsumerB
+
+    rect rgb(230, 255, 230)
+        Note over CA: Phase 1: ConsumerA 읽기
+        Prod->>Kafka: msg1, msg2, msg3
+        CA->>Kafka: poll → 3건 수신
+        CA->>Kafka: commit (offset=3)
+        Note over CA: ConsumerA 종료
+    end
+
+    rect rgb(255, 230, 230)
+        Note over Kafka: Phase 2: Consumer 없음
+        Prod->>Kafka: msg4, msg5
+        Note over Kafka: 메시지 보존됨<br/>(Redis와 다름!)
+    end
+
+    rect rgb(230, 240, 255)
+        Note over CB: Phase 3: ConsumerB 시작 (같은 Group)
+        CB->>Kafka: poll (offset 3부터)
+        Kafka-->>CB: msg4, msg5
+        Note over CB: 중지 중 발행된 메시지를<br/>이어서 읽기 ✅
+    end
+```
+
+### 구독자가 없어도 메시지는 Kafka에 보존된다
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Kafka as Kafka
+    participant Cons as Consumer (나중에 연결)
+
+    Prod->>Kafka: msg1, msg2, msg3
+    Note over Kafka: 구독자 없음<br/>메시지는 로그에 보존
+
+    Note over Cons: 나중에 연결
+    Cons->>Kafka: subscribe (from beginning)
+    Kafka-->>Cons: msg1, msg2, msg3
+
+    Note over Cons: 3건 모두 수신 ✅<br/>Redis Pub/Sub이었다면<br/>모두 유실됐을 것
+```
+
+---
+
+## KafkaConsumerGroupIndependenceTest
+
+Consumer Group 간 독립적 소비 — 각 Group은 자기만의 offset을 관리한다.
+
+### 두 Consumer Group이 같은 토픽의 모든 메시지를 각각 독립적으로 수신한다
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Kafka as Kafka
+    participant GA as settlement-group (정산)
+    participant GB as notification-group (알림)
+
+    Prod->>Kafka: msg1, msg2, msg3
+
+    GA->>Kafka: poll
+    Kafka-->>GA: msg1, msg2, msg3 (3건)
+
+    GB->>Kafka: poll
+    Kafka-->>GB: msg1, msg2, msg3 (3건)
+
+    Note over GA,GB: 각 Group이 독립적으로<br/>모든 메시지를 수신 (Fan-Out)
+```
+
+### 한 Consumer Group의 소비 속도가 다른 Group에 영향을 주지 않는다
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Kafka as Kafka
+    participant Slow as slow-group
+    participant Fast as fast-group
+
+    rect rgb(230, 255, 230)
+        Prod->>Kafka: msg1, msg2, msg3
+        Slow->>Kafka: poll → 3건 + commit (offset=3)
+    end
+
+    rect rgb(255, 245, 230)
+        Prod->>Kafka: msg4, msg5
+        Note over Slow: slow-group은 아직 읽지 않음
+    end
+
+    Fast->>Kafka: poll (from beginning)
+    Kafka-->>Fast: msg1~msg5 (5건 전부)
+
+    Slow->>Kafka: poll (offset 3부터)
+    Kafka-->>Slow: msg4, msg5 (2건)
+
+    Note over Slow,Fast: fast-group: 5건<br/>slow-group: 2건 (이어서 읽기)<br/>속도 독립성 ✅
+```
+
+---
+
+## KafkaPartitionOrderingTest
+
+파티션 기반 순서 보장 — 같은 key → 같은 partition → 순서 보장.
+
+### 같은 key의 메시지는 같은 파티션에 저장된다
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Kafka as Kafka (3 partitions)
+
+    Prod->>Kafka: key="order-1001", msg1
+    Prod->>Kafka: key="order-1001", msg2
+    Prod->>Kafka: key="order-1001", msg3
+    Prod->>Kafka: key="order-1001", msg4
+    Prod->>Kafka: key="order-1001", msg5
+
+    Note over Kafka: 5건 모두 같은 파티션<br/>(파티션 set size = 1) ✅
+```
+
+### 같은 파티션의 메시지는 발행 순서대로 소비된다
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Kafka as Kafka (3 partitions)
+    participant Cons as Consumer
+
+    Prod->>Kafka: key="order-1001", "생성"
+    Prod->>Kafka: key="order-1001", "결제"
+    Prod->>Kafka: key="order-1001", "배송"
+
+    Cons->>Kafka: poll
+    Note over Cons: 수신 순서:<br/>1. "생성"<br/>2. "결제"<br/>3. "배송"<br/>같은 key → 같은 파티션<br/>→ 순서 보장 ✅
+```
+
+### 다른 key의 메시지는 다른 파티션으로 분배될 수 있다
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Kafka as Kafka (3 partitions)
+
+    Prod->>Kafka: key="order-0" ~ "order-9" (10건)
+
+    Note over Kafka: Partition 0: [order-X, order-Y, ...]
+    Note over Kafka: Partition 1: [order-Z, order-W, ...]
+    Note over Kafka: Partition 2: [order-A, order-B, ...]
+
+    Note over Kafka: 사용된 파티션 >= 2개 ✅<br/>다른 key는 다른 파티션으로<br/>분배될 수 있다
+```
+
+---
+
+## TransactionalOutboxCompletionTest
+
+Step 3의 Event Store + Kafka Relay = Transactional Outbox Pattern 완성.
 
 ```
 Step 3이 해결한 것                      Step 5가 해결한 것
@@ -95,59 +226,75 @@ Step 3이 해결한 것                      Step 5가 해결한 것
        "원자적으로 기록하고, 안전하게 전달한다"
 ```
 
+### 주문 저장과 이벤트 기록이 하나의 트랜잭션으로 묶인다
+
 ```mermaid
 sequenceDiagram
-    participant App as Application
-    participant DB as Database
-    participant Outbox as outbox_events 테이블
+    participant Test as 테스트
+    participant OS as OrderService
+    participant DB as DB
+    participant OB as outbox_events
+
+    Note over OS: TX BEGIN
+    OS->>DB: INSERT 주문
+    OS->>OB: INSERT 이벤트 (PENDING)
+    Note over OS: TX COMMIT
+
+    Test->>DB: 주문 조회 → 존재 ✅
+    Test->>OB: 이벤트 조회 → PENDING, ORDER_CREATED ✅
+```
+
+### 릴레이가 PENDING 이벤트를 Kafka로 발행하고 SENT로 변경한다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
     participant Relay as Relay (Scheduler)
-    participant Kafka
+    participant OB as outbox_events
+    participant Kafka as Kafka
+    participant Cons as Consumer
 
     rect rgb(230, 245, 230)
-    Note over App,Outbox: Step 3 영역: 원자성 확보
-    Note over App: TX BEGIN
-    App->>DB: 1. 주문 저장
-    App->>Outbox: 2. 이벤트 기록 (PENDING)
-    Note over App: TX COMMIT
+        Note over OB: Step 3 영역: 원자성 확보
+        Note over OB: PENDING 이벤트 1건
     end
 
     rect rgb(230, 235, 250)
-    Note over Relay,Kafka: Step 5 영역: 외부 전달
-    Relay->>Outbox: 3. PENDING 이벤트 조회
-    Relay->>Kafka: 4. Kafka로 발행
-    Relay->>Outbox: 5. 상태를 SENT로 변경
+        Note over Relay,Kafka: Step 5 영역: 외부 전달
+        Relay->>OB: SELECT WHERE status = 'PENDING'
+        Relay->>Kafka: PUBLISH (key=orderId, value=payload)
+        Relay->>OB: UPDATE status = 'SENT'
     end
 
-    Kafka-->>Consumer1: Consumer Group A (정산)
-    Kafka-->>Consumer2: Consumer Group B (알림)
+    Test->>OB: findByStatus(PENDING) → 0건
+    Test->>OB: findByStatus(SENT) → 1건 ✅
 
-    Note over DB,Kafka: Step 3 Event Store + Kafka Relay<br/>= Transactional Outbox Pattern
+    Cons->>Kafka: poll
+    Note over Cons: key = orderId ✅<br/>value에 "노트북" 포함 ✅
+```
+
+### Kafka 발행 실패 시 이벤트는 여전히 PENDING 상태를 유지한다
+
+```mermaid
+sequenceDiagram
+    participant Test as 테스트
+    participant Relay as Relay
+    participant OB as outbox_events
+    participant Kafka as Kafka<br/>(연결 불가)
+
+    Note over OB: PENDING 1건
+
+    Relay->>OB: SELECT WHERE status = 'PENDING'
+    Relay->>Kafka: PUBLISH 시도
+    Kafka--xRelay: 연결 실패!
+
+    Test->>OB: findByStatus(PENDING) → 1건 (그대로) ✅
+    Test->>OB: findByStatus(SENT) → 0건
+
+    Note over Test: 다음 릴레이 실행 시<br/>재시도 가능 (PENDING 유지)
 ```
 
 ---
-
-## 테스트 목록
-
-| 테스트 클래스 | 메서드 | 증명하는 것 |
-|---|---|---|
-| KafkaBasicPipelineTest | Producer가_보낸_메시지를_Consumer가_수신한다 | 기본 파이프라인 |
-| KafkaBasicPipelineTest | 여러_메시지를_순서대로_발행하면_같은_파티션에서_순서대로_소비된다 | 파티션 내 순서 |
-| KafkaMessagePreservationTest | Consumer가_중지된_사이에_발행된_메시지를_재시작_후_이어서_읽는다 | 메시지 보존 |
-| KafkaMessagePreservationTest | 구독자가_없어도_메시지는_Kafka에_보존된다 | Redis 대비 차이 |
-| KafkaConsumerGroupIndependenceTest | 두_Consumer_Group이_같은_토픽의_모든_메시지를_각각_독립적으로_수신한다 | Group 독립성 |
-| KafkaConsumerGroupIndependenceTest | 한_Consumer_Group의_소비_속도가_다른_Group에_영향을_주지_않는다 | 속도 독립성 |
-| KafkaPartitionOrderingTest | 같은_key의_메시지는_같은_파티션에_저장된다 | Key-Partition 매핑 |
-| KafkaPartitionOrderingTest | 같은_파티션의_메시지는_발행_순서대로_소비된다 | 파티션 내 순서 |
-| KafkaPartitionOrderingTest | 다른_key의_메시지는_다른_파티션으로_분배될_수_있다 | 파티션 분배 |
-| TransactionalOutboxCompletionTest | 주문_저장과_이벤트_기록이_하나의_트랜잭션으로_묶인다 | 원자성 |
-| TransactionalOutboxCompletionTest | 릴레이가_PENDING_이벤트를_Kafka로_발행하고_SENT로_변경한다 | Outbox 완성 |
-| TransactionalOutboxCompletionTest | Kafka_발행_실패_시_이벤트는_여전히_PENDING_상태를_유지한다 | 실패 복구 |
-
-## Testcontainer
-
-```
-KafkaContainer("confluentinc/cp-kafka:7.6.0") - KRaft mode (ZooKeeper 불필요)
-```
 
 ## 학습 포인트
 
@@ -162,6 +309,12 @@ KafkaContainer("confluentinc/cp-kafka:7.6.0") - KRaft mode (ZooKeeper 불필요)
 > `TransactionalOutboxCompletionTest`에서 Step 3의 원자성 테스트와 이 Step의 릴레이 테스트가 어떻게 연결되는지 비교해 보세요.
 
 ---
+
+## Testcontainer
+
+```
+KafkaContainer("confluentinc/cp-kafka:7.6.0") - KRaft mode (ZooKeeper 불필요)
+```
 
 ## 중복이 왜 발생하는가 -> Step 6
 

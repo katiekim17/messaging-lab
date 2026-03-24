@@ -179,7 +179,7 @@ class OrderService {
     private final ApplicationEventPublisher publisher;
 
     void createOrder(...) {
-        publisher.publishEvent(OrderCreatedEvent.from(order));
+        publisher.publishEvent(OrderCreatedEvent.of(order.getOrderId(), order.getUserId(), order.getAmount()));
         // 누가 듣든 내 알 바 아님
     }
 }
@@ -245,7 +245,7 @@ void handle(CreateOrderCommand cmd) {
     orderRepository.save(order);
 
     // 실행 결과를 Event로 발행한다 (현재 → 과거 확정)
-    publisher.publishEvent(OrderCreatedEvent.from(order));
+    publisher.publishEvent(OrderCreatedEvent.of(order.getOrderId(), order.getUserId(), order.getAmount()));
 }
 ```
 

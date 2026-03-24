@@ -11,6 +11,8 @@
 |------|------|
 | **Command** | "~해라" — 아직 일어나지 않은 일에 대한 1:1 지시. 실패할 수 있고, 발신자가 결과를 처리해야 한다. 예: `IssueCouponCommand` |
 | **Event** | "~되었다" — 이미 확정된 사실에 대한 1:N 통지. 발행자는 누가 듣는지 모른다. 예: `OrderCreatedEvent` |
+| **commandId** | Command의 고유 식별자. 같은 Command가 2번 전달되었을 때 중복을 판별한다. Step 7(멱등성)과 연결. |
+| **requestedAt** | Command의 요청 시각. Event의 occurredAt(확정 시각)과 의미가 다르다. |
 
 ---
 
@@ -34,6 +36,7 @@
 | **@Async** | Spring의 비동기 실행 어노테이션. 별도 스레드에서 실행되어 응답이 빨라지지만, 예외가 호출자에게 전파되지 않는다. |
 | **Eventual Consistency** | 최종적 일관성. 데이터가 즉시 일관되지 않지만, 일정 시간이 지나면 일관된 상태에 도달한다. AFTER_COMMIT + @Async를 선택한 순간 이를 수용한 것이다. |
 | **Strong Consistency** | 강한 일관성. 쓰기 직후 읽기에서 항상 최신 값을 보장한다. 같은 트랜잭션 안에서만 가능. |
+| **Self-invocation** | 같은 클래스 내부에서 `this.method()`를 호출하면 Spring AOP 프록시를 거치지 않는 문제. `@Transactional(REQUIRES_NEW)` 같은 어노테이션이 무시된다. 별도 빈으로 분리해야 한다. |
 
 ---
 
@@ -56,12 +59,24 @@
 | **Pub/Sub (Publish/Subscribe)** | 발행자가 채널에 메시지를 보내고, 구독자가 채널을 구독하여 수신하는 메시징 패턴. |
 | **Fire-and-forget** | 메시지를 보내고 결과를 확인하지 않는 방식. Redis Pub/Sub의 기본 동작. 구독자가 없으면 메시지는 사라진다. |
 | **Fan-Out** | 하나의 메시지를 모든 구독자에게 브로드캐스트하는 패턴. 서로 다른 관심사가 같은 이벤트를 각자 처리할 때 적합. |
-| **Competing Consumers** | 같은 관심사의 여러 인스턴스가 메시지를 나눠서 처리하는 부하 분산 패턴. Redis Pub/Sub으로는 불가능, Kafka Consumer Group으로 가능. |
 | **Backpressure** | Producer가 Consumer보다 빠를 때 발생하는 압력. Redis Pub/Sub에서는 처리 못한 메시지가 유실되고, Kafka에서는 lag으로 쌓인다. |
+| **Push 모델** | 브로커가 Consumer에게 메시지를 밀어넣는 방식. Redis Pub/Sub이 이 모델이다. Consumer가 없으면 메시지가 사라진다. |
 
 ---
 
-## Step 5 — Kafka
+## Step 5 — RabbitMQ
+
+| 용어 | 설명 |
+|------|------|
+| **Queue (큐)** | 메시지를 순서대로 저장하는 버퍼. Producer가 보낸 메시지를 Consumer가 읽어갈 때까지 보관한다. |
+| **ACK (Acknowledgement)** | Consumer가 메시지를 성공적으로 처리했음을 브로커에 알리는 신호. RabbitMQ에서 ACK하면 메시지가 큐에서 삭제된다. |
+| **Competing Consumers** | 같은 큐에 여러 Consumer가 붙어 메시지를 나눠 처리하는 부하 분산 패턴. Redis Pub/Sub에서는 불가능, RabbitMQ와 Kafka에서 가능. |
+| **Exchange** | RabbitMQ에서 메시지를 라우팅하는 컴포넌트. Fan-Out을 하려면 Exchange + 여러 큐 설정이 필요하다. |
+| **소비 후 삭제** | RabbitMQ의 핵심 특성. ACK한 메시지는 큐에서 삭제되어 재처리가 불가능하다. Kafka와의 결정적 차이. |
+
+---
+
+## Step 6 — Kafka
 
 | 용어 | 설명 |
 |------|------|
@@ -69,14 +84,15 @@
 | **Partition** | 토픽의 물리적 분할 단위. 파티션 내에서는 메시지 순서가 보장된다. |
 | **Offset** | 파티션 내 메시지의 순번. Consumer는 자신의 offset을 관리하며 이어 읽기가 가능하다. |
 | **Consumer Group** | 같은 토픽을 구독하는 Consumer의 논리적 그룹. 그룹 간은 독립(Fan-Out), 그룹 내는 부하 분산(Competing Consumers). |
-| **Append-only Log** | Kafka의 저장 모델. 메시지는 로그 끝에 추가만 되며, 수정이나 삭제가 없다. |
+| **Append-only Log** | Kafka의 저장 모델. 메시지는 로그 끝에 추가만 되며, 수정이나 삭제가 없다. 소비해도 남아있다. |
 | **Key-Partition Mapping** | 같은 key의 메시지는 같은 파티션에 저장된다. 이를 통해 특정 엔티티의 이벤트 순서를 보장한다. |
-| **Transactional Outbox Pattern** | 도메인 변경과 이벤트 기록을 같은 TX로 묶고(Step 3), 릴레이가 외부로 전달하는(Step 5) 패턴. 원자성과 전달 보장을 동시에 확보한다. |
+| **Pull 모델** | Consumer가 자기 속도로 브로커에서 메시지를 가져가는 방식. Kafka가 이 모델이다. Consumer가 없어도 메시지가 로그에 남아있다. |
+| **Transactional Outbox Pattern** | 도메인 변경과 이벤트 기록을 같은 TX로 묶고(Step 3), 릴레이가 외부로 전달하는(Step 6) 패턴. 원자성과 전달 보장을 동시에 확보한다. |
 | **At Least Once** | 메시지가 최소 한 번은 전달되는 보장. 중복은 발생할 수 있다. Kafka의 기본 전달 보장. |
 
 ---
 
-## Step 6 — Idempotent Consumer
+## Step 7 — Idempotent Consumer
 
 | 용어 | 설명 |
 |------|------|

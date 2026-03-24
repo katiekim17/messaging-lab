@@ -59,35 +59,44 @@
 
 ---
 
-## Command에는 없고 Event에는 있는 것
+## Command의 타임스탬프와 Event의 타임스탬프는 의미가 다르다
 
 코드로 보면 차이가 선명해진다.
 
 ```java
 class IssueCouponCommand {
-    Long userId;
+    String commandId;      // 멱등성 식별자 (Step 7에서 다시 만난다)
+    String userId;
     String couponType;
-    // occurredAt? → 없다. 아직 안 일어났으니까.
+    Instant requestedAt;   // "요청한 시각" — 타임아웃, 감사 추적용
 }
 
 class OrderCreatedEvent {
-    Long orderId;
-    BigDecimal amount;
-    Instant occurredAt;   // 반드시 있다. 언제 일어났는지가 사실의 일부니까.
+    String eventId;
+    String orderId;
+    String userId;
+    long amount;
+    Instant occurredAt;    // "사실이 확정된 시각" — 순서 판단의 기준
 }
 ```
 
-`occurredAt`의 유무가 단순한 필드 차이가 아니다.
-**이 객체가 담고 있는 것이 "의도"인지 "사실"인지**를 구분하는 표식이다.
+둘 다 타임스탬프가 있을 수 있다. 차이는 **의미**다.
+
+- Command의 `requestedAt`은 **"언제 요청했는가"**다. 아직 실행되지 않은 의도의 시각이다.
+- Event의 `occurredAt`은 **"언제 일어났는가"**다. 이미 확정된 사실의 시각이다.
+
+이 객체가 담고 있는 것이 **"의도"인지 "사실"인지** — 이게 Command와 Event의 본질적 차이다.
 
 > **CommandEventConceptTest** — `Command는_미래시제다_아직_일어나지_않은_일()`과
 > `Event는_과거시제다_이미_확정된_사실()`에서 이 구조적 차이를 직접 확인할 수 있다.
 
 이게 나중에 왜 중요해지는가?
 
-Event를 DB에 저장할 때(Step 3 Event Store), `occurredAt`은 순서 판단의 기준이 된다.
-Kafka 토픽에서 이벤트를 재처리할 때(Step 5), "이 이벤트가 저 이벤트보다 먼저 일어났는가?"를 `occurredAt`으로 판단한다.
-Command에는 이 필드가 없으니까 저장/재처리의 대상이 아니다.
+Event를 DB에 저장할 때(Step 3 Event Store), `occurredAt`은 순서 판단의 기준이 된다. Kafka 토픽에서 이벤트를 재처리할 때(Step 6), "이 이벤트가 저 이벤트보다 먼저 일어났는가?"를 `occurredAt`으로 판단한다.
+
+Command도 저장할 수 있다. 실패 시 재시도를 위한 Command 큐, Saga에서 보상 트랜잭션을 위한 원본 Command 보관, 감사(audit) 목적의 요청 로그 — 전부 Command를 저장하는 실무 패턴이다. 다만 Command를 저장할 때 기준이 되는 것은 `requestedAt`(요청 시각)이고, Event를 저장할 때 기준이 되는 것은 `occurredAt`(확정 시각)이다. **같은 "저장"이지만 의미가 다르다.**
+
+그리고 Command의 `commandId`는 Step 7(Idempotent Consumer)에서 다시 만난다. 같은 Command가 2번 전달되었을 때 `commandId`로 중복을 판별하는 것이 멱등 처리의 핵심이다.
 
 ---
 
@@ -117,9 +126,9 @@ sequenceDiagram
 이미 일어난 사실을 Event로 발행하면:
 
 ```java
-publisher.publishEvent(new OrderCreatedEvent(orderId, amount, now));
-// → 리스너가 0개여도 발행은 성공한다.
-// → 리스너가 예외를 던져도 "주문이 생성되었다"는 사실은 변하지 않는다.
+publisher.publishEvent(OrderCreatedEvent.of(orderId, userId, amount));
+// → 개념적으로: 리스너가 0개여도 발행은 성공한다.
+// → 개념적으로: 리스너가 예외를 던져도 "주문이 생성되었다"는 사실은 변하지 않는다.
 ```
 
 ```mermaid
@@ -131,11 +140,13 @@ sequenceDiagram
     Publisher->>L1: OrderCreatedEvent
     Publisher->>L2: OrderCreatedEvent
 
-    Note over Publisher: 누가 듣든, 실패하든<br/>발행은 이미 성공
+    Note over Publisher: 개념적으로:<br/>누가 듣든, 실패하든<br/>"주문이 생성되었다"는<br/>사실은 변하지 않는다
 ```
 
 > **CommandEventBehaviorTest** — `Command는_실패할_수_있고_발신자가_처리해야_한다()`와
 > `Event는_이미_일어난_사실이므로_발행_자체는_실패하지_않는다()`에서 확인할 수 있다.
+
+이건 **개념적으로** 그렇다. 실제 구현체에서는 다를 수 있다. Spring의 `@EventListener`는 발행자와 같은 TX에서 동기 실행되기 때문에, 리스너 예외가 발행자 TX를 롤백시킨다. **"사실은 변하지 않는다"는 개념이, 구현에서는 깨질 수 있다는 것이다.** 이 괴리가 Step 1에서 직접 체험하는 첫 번째 문제다.
 
 이 차이가 설계 판단을 가른다.
 
@@ -269,7 +280,7 @@ Transactional Outbox Pattern의 본질이다. 그 출발점이 여기다.
 각 작업에 세 가지 질문을 던져보자.
 
 > **Q1. 이 작업이 실패하면 주문도 실패해야 하는가?**
-> **Q2. 이 작업의 실행 순서가 주문 흐름에서 중요한가?**
+> **Q2. 이 작업이 다른 작업보다 반드시 먼저 또는 나중에 실행돼야 하는가?**
 > **Q3. 사용자 응답에 이 작업의 결과가 포함돼야 하는가?**
 
 직접 채워보자. 아래 테이블을 보기 전에 먼저 자기 답을 적어보자.
@@ -277,11 +288,11 @@ Transactional Outbox Pattern의 본질이다. 그 출발점이 여기다.
 <details>
 <summary><b>답 확인</b></summary>
 
-| 작업 | Q1. 실패 시 주문 실패? | Q2. 순서 중요? | Q3. 응답에 포함? | 판단 |
+| 작업 | Q1. 실패 시 주문 실패? | Q2. 선후관계 고정? | Q3. 응답에 포함? | 판단 |
 |------|:---:|:---:|:---:|------|
-| 재고 차감 | Yes | Yes | Yes | **Command** |
-| 쿠폰 사용 | Yes | No | Yes (할인 금액) | **Command** |
-| 결제 요청 | Yes | Yes | Yes (결제 결과) | **Command** |
+| 재고 차감 | Yes | Yes (결제 전에) | Yes | **Command** |
+| 쿠폰 사용 | Yes | No (재고/결제와 순서 무관) | Yes (할인 금액) | **Command** |
+| 결제 요청 | Yes | Yes (재고/쿠폰 후에) | Yes (결제 결과) | **Command** |
 | 주문 저장 | Yes | — | Yes | **핵심 TX** |
 | 포인트 적립 | No | No | No | **Event** |
 | 알림 발송 | No | No | No | **Event** |
@@ -382,12 +393,13 @@ order-events           ← 이건 Event 토픽이다. "주문이 생성되었다
 
 테스트를 실행하기 전에 먼저 답해보고, 테스트로 자기 답을 검증하자.
 
-- Command에 `occurredAt`이 없는 이유를 한 문장으로 설명할 수 있는가?
-- Event 발행 시 리스너가 0개인데 왜 에러가 아닌가?
+- Command의 `requestedAt`과 Event의 `occurredAt`은 어떻게 다른가?
+- Event 발행 시 리스너가 0개인데 왜 에러가 아닌가? 그리고 이 원칙이 구현에서 깨질 수 있는 상황은?
 - "쿠폰 사용 실패 → 주문 롤백"이 맞다면, 쿠폰 사용은 Command인가 Event인가?
 - "포인트 적립 실패 → 주문 유지"가 맞다면, 포인트 적립은 Command인가 Event인가?
 - `coupon-issue-requests`와 `order-events`라는 토픽 이름이 왜 다른 형태인가?
 - API가 "주문 완료"를 약속할 때와 "주문 접수"를 약속할 때, 재고 차감의 판단이 왜 달라지는가?
+- Command의 `commandId`가 Step 7(멱등 처리)에서 어떤 역할을 하게 되는가?
 
 > 답이 바로 나오면 Step 1로 넘어가자.
 > 막히면 `CommandEventConceptTest`와 `CommandEventBehaviorTest`를 실행해서 확인하자.

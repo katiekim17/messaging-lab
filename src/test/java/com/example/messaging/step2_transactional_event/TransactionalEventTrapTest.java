@@ -2,6 +2,7 @@ package com.example.messaging.step2_transactional_event;
 
 import com.example.messaging.step2_transactional_event.listener.AfterCommitDbSaveListener;
 import com.example.messaging.step2_transactional_event.listener.AsyncTransactionalPointListener;
+import com.example.messaging.step2_transactional_event.listener.SelfInvocationListener;
 import com.example.messaging.step2_transactional_event.listener.TransactionalPointListener;
 import com.example.messaging.step2_transactional_event.repository.OrderRepository;
 import com.example.messaging.step2_transactional_event.repository.PointRepository;
@@ -48,6 +49,9 @@ class TransactionalEventTrapTest {
     AfterCommitDbSaveListener afterCommitDbSaveListener;
 
     @Autowired
+    SelfInvocationListener selfInvocationListener;
+
+    @Autowired
     OrderRepository orderRepository;
 
     @Autowired
@@ -61,6 +65,7 @@ class TransactionalEventTrapTest {
         transactionalPointListener.reset();
         asyncPointListener.reset();
         afterCommitDbSaveListener.reset();
+        selfInvocationListener.reset();
         orderRepository.deleteAll();
         pointRepository.deleteAll();
     }
@@ -215,5 +220,36 @@ class TransactionalEventTrapTest {
         // executor.setCorePoolSize(5);
         // executor.setMaxPoolSize(10);
         // executor.setQueueCapacity(100);
+    }
+
+    /**
+     * 함정 3-3 (Self-invocation): 같은 클래스 안에서 this.savePoint()를 호출하면
+     * Spring AOP 프록시를 거치지 않아 @Transactional(REQUIRES_NEW)이 무시된다.
+     *
+     * AFTER_COMMIT 시점에 기존 TX는 이미 커밋 완료.
+     * this.savePoint()가 REQUIRES_NEW로 새 TX를 열어야 하지만,
+     * 프록시 없이 직접 호출되므로 새 TX가 생기지 않는다.
+     * → EntityManager.flush()가 TransactionRequiredException을 던진다.
+     *
+     * 해결: REQUIRES_NEW 메서드를 반드시 별도 빈(PointSaveService)으로 분리해야 한다.
+     */
+    @Test
+    void Self_invocation으로_REQUIRES_NEW를_호출하면_프록시를_거치지_않아_새_TX가_열리지_않는다() {
+        // Given: 다른 리스너 비활성화 (격리)
+        transactionalPointListener.setEnabled(false);
+        asyncPointListener.setEnabled(false);
+
+        selfInvocationListener.enable();
+
+        // When
+        orderService.createOrder("user-self-invocation", 50_000L);
+
+        // Then: 리스너는 실행됐지만 this.savePoint() 호출로 REQUIRES_NEW가 무시됨
+        assertThat(selfInvocationListener.isExecuted()).isTrue();
+        // 새 TX가 열리지 않았으므로 flush()에서 TransactionRequiredException 발생
+        assertThat(selfInvocationListener.getCapturedException())
+                .isInstanceOf(TransactionRequiredException.class);
+        // 포인트는 저장되지 않음
+        assertThat(pointRepository.findByUserId("user-self-invocation")).isEmpty();
     }
 }

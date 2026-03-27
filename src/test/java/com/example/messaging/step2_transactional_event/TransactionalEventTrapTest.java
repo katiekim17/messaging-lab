@@ -20,6 +20,8 @@ import org.springframework.test.annotation.DirtiesContext;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import jakarta.persistence.TransactionRequiredException;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -122,12 +124,11 @@ class TransactionalEventTrapTest {
         // When
         orderService.createOrder("user-no-tx", 50_000L);
 
-        // Then: 핸들러는 실행됐지만 REQUIRES_NEW 없이는 포인트가 저장되지 않음
+        // Then: 핸들러는 실행됐지만 EntityManager.persist() 호출 즉시 예외 발생
         assertThat(afterCommitDbSaveListener.isExecuted()).isTrue();
+        assertThat(afterCommitDbSaveListener.getCapturedException())
+                .isInstanceOf(TransactionRequiredException.class);
         assertThat(pointRepository.findByUserId("user-no-tx")).isEmpty();
-        // EntityManager 직접 사용 시 TransactionRequiredException이 발생한다.
-        // Spring Data JPA의 save()는 자체 @Transactional로 우연히 동작할 수 있지만,
-        // 이건 의도한 TX 경계가 아니다. → 다음 테스트에서 REQUIRES_NEW로 해결한다.
     }
 
     /**
@@ -153,6 +154,45 @@ class TransactionalEventTrapTest {
         // Then: 별도 빈의 REQUIRES_NEW로 새 TX에서 저장 성공
         assertThat(afterCommitDbSaveListener.isExecuted()).isTrue();
         assertThat(pointRepository.findByUserId("user-trap-new")).isPresent();
+    }
+
+    /**
+     * 확인: AFTER_COMMIT 시점의 실제 TX 상태.
+     *
+     * AbstractPlatformTransactionManager.commit() 실행 순서:
+     *   1. doCommit()               ← 실제 DB commit
+     *   2. triggerAfterCommit()     ← AFTER_COMMIT 리스너 실행 ← 여기
+     *   3. triggerAfterCompletion()
+     *   4. cleanupAfterCompletion() ← 여기서 isActualTransactionActive = false 로 바뀜
+     *
+     * Spring의 isActualTransactionActive()는 AFTER_COMMIT 시점에 아직 true다.
+     * cleanupAfterCompletion()이 아직 실행되지 않았기 때문이다.
+     *
+     * 그럼에도 EntityManager.persist()가 TransactionRequiredException을 던지는 이유:
+     * Spring TX 플래그와 JPA EntityManager 세션 상태는 별개다.
+     * JPA 세션은 이미 커밋 완료 상태이므로 persist()를 거부한다.
+     */
+    @Test
+    void AFTER_COMMIT_시점에_Spring_TX_플래그는_아직_true지만_JPA_세션은_이미_커밋됐다() {
+        // Given
+        transactionalPointListener.setEnabled(false);
+        asyncPointListener.setEnabled(false);
+        afterCommitDbSaveListener.enable();
+        afterCommitDbSaveListener.setUseRequiresNew(false);
+
+        // When
+        orderService.createOrder("user-tx-state-check", 50_000L);
+
+        // Then
+        assertThat(afterCommitDbSaveListener.isExecuted()).isTrue();
+        // Spring TX 플래그: cleanupAfterCompletion() 전이라 아직 true
+        assertThat(afterCommitDbSaveListener.isTxActiveInHandler()).isTrue();
+        // JPA EntityManager: 이미 커밋 완료 → flush() 시 TransactionRequiredException 발생
+        Exception ex = afterCommitDbSaveListener.getCapturedException();
+        System.out.println("\n=== AFTER_COMMIT에서 flush() 호출 시 발생한 예외 ===");
+        System.out.println(ex.getClass().getName() + ": " + ex.getMessage());
+        System.out.println("===================================================\n");
+        assertThat(ex).isInstanceOf(TransactionRequiredException.class);
     }
 
     /**

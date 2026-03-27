@@ -1,7 +1,9 @@
 package com.example.messaging.step2_transactional_event;
 
+import com.example.messaging.step2_transactional_event.listener.PointSaveService;
 import com.example.messaging.step2_transactional_event.listener.SyncPointListener;
 import com.example.messaging.step2_transactional_event.repository.OrderRepository;
+import com.example.messaging.step2_transactional_event.repository.PointRepository;
 import com.example.messaging.step2_transactional_event.service.OrderService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -31,9 +33,17 @@ class EventListenerTimingTest {
     @Autowired
     OrderRepository orderRepository;
 
+    @Autowired
+    PointRepository pointRepository;
+
+    @Autowired
+    PointSaveService pointSaveService;
+
     @AfterEach
     void tearDown() {
         syncPointListener.reset();
+        orderRepository.deleteAll();
+        pointRepository.deleteAll();
     }
 
     /**
@@ -59,5 +69,29 @@ class EventListenerTimingTest {
 
         // 주문은 롤백되었지만, 외부 API 호출은 되돌릴 수 없다
         assertThat(orderRepository.findAll()).isEmpty();
+    }
+
+    /**
+     * @EventListener 콜백에서 별도 REQUIRES_NEW TX로 포인트를 저장하면
+     * 주문 TX가 롤백되어도 포인트는 이미 커밋되어 DB 불일치가 발생한다.
+     *
+     * @TransactionalEventListener(AFTER_COMMIT)를 써야 하는 핵심 이유.
+     */
+    @Test
+    void EventListener는_TX_롤백_전에_별도_TX로_포인트를_저장하면_DB_불일치가_생긴다() {
+        String userId = "user-eventlistener-inconsistency";
+
+        // @EventListener 콜백에서 REQUIRES_NEW로 포인트 저장
+        syncPointListener.setCallback(() -> pointSaveService.savePoint(userId, 50_000L));
+
+        // When: 주문 TX 도중 강제 롤백
+        assertThatThrownBy(() -> orderService.createOrderThatWillFail(userId, 50_000L))
+                .isInstanceOf(RuntimeException.class);
+
+        // Then: 주문은 롤백 → DB에 없음
+        assertThat(orderRepository.findAll()).isEmpty();
+
+        // 하지만 포인트는 REQUIRES_NEW로 이미 커밋됨 → DB에 남아있다! (불일치)
+        assertThat(pointRepository.findByUserId(userId)).isPresent();
     }
 }
